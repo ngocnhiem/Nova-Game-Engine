@@ -59,6 +59,7 @@ namespace
 		void(__stdcall* AppFocus)(int) = nullptr;
 		void(__stdcall* SceneEvent)(int, int, int) = nullptr;   // 선택 (AppEvents.SceneEvent)
 		void(__stdcall* AssetEvent)(int, const char*) = nullptr;   // 선택 (데이터 에셋 캐시)
+		void(__stdcall* EngineEvent)(int) = nullptr;   // 선택 (0 = Play 끝 — NativeContainer 누수 알림)
 	} m;
 
 	ScriptEngine::State s_State = ScriptEngine::State::NotStarted;
@@ -229,6 +230,8 @@ namespace
 			m.ExecAssembly = nullptr;
 		if (load(dll.c_str(), type, L"AssetEvent", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.AssetEvent) < 0)
 			m.AssetEvent = nullptr;
+		if (load(dll.c_str(), type, L"EngineEvent", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.EngineEvent) < 0)
+			m.EngineEvent = nullptr;
 		const wchar_t* appEvents = L"NovaEngine.Interop.AppEvents, NovaScriptCore";
 		if (load(dll.c_str(), appEvents, L"Pause", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.AppPause) < 0)
 			m.AppPause = nullptr;
@@ -758,6 +761,8 @@ namespace ScriptEngine
 			m.InvokeUIEvent(0, -1, 0.0f, "");   // 이전 Play 의 UI 리스너(onClick, onValueChanged ...) 정리
 		if (s_AssemblyLoaded && m.AssetEvent)
 			m.AssetEvent(0, "");   // 데이터 에셋은 Play 마다 파일에서 새로 (Play 중 스크립트가 바꾼 값은 남지 않는다)
+		if (!playing && s_AssemblyLoaded && m.EngineEvent)
+			m.EngineEvent(0);   // Dispose 하지 않은 NativeArray 등 (Unity 의 NativeLeakDetection)
 		if (!playing && s_PendingReload && IsAvailable())
 			LoadAssembly();
 	}

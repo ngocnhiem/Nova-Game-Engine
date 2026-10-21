@@ -152,9 +152,9 @@ VFX Graph · Shader Graph · Terrain Graph (Gaea 식) · PCG · 절차적 식생
 
 | # | 무엇 | NOVA 이름 (Unity 와 같게) | 규모 |
 |---|---|---|---|
-| B-1 | **Collections · Mathematics** — `NativeArray<T>` · `NativeList` · `NativeHashMap` (비관리 메모리, `Allocator.Temp/TempJob/Persistent`, 편집기에서 Dispose · 동시 쓰기 검사), `float2/3/4` · `quaternion` · `float4x4` · `math.*` (`Vector128` 로 구현해 JIT 가 SIMD 로) | `Unity.Collections` · `Unity.Mathematics` (네임스페이스는 `NovaEngine.Collections` · `NovaEngine.Mathematics`) | M |
+| B-1 | **Collections · Mathematics** (2026-10-21 완료 — [MATHEMATICS_COLLECTIONS](MATHEMATICS_COLLECTIONS.md)) — `NativeArray<T>` · `NativeList` · `NativeHashMap` · `NativeHashSet` · `NativeQueue` · `NativeReference` (비관리 메모리, `Allocator.Temp/TempJob/Persistent`, 에디터에서 범위 · Dispose 뒤 사용 · Temp 수명 검사, Play 끝 누수 알림), `float2/3/4` · `int` · `bool` 벡터 (스위즐) · `quaternion` · `float4x4` · `math.*` · `Random`. 동시 쓰기 검사는 B-2 와 함께 | `Unity.Collections` · `Unity.Mathematics` (네임스페이스는 `NovaEngine.Collections` · `NovaEngine.Mathematics`) | M |
 | B-2 | **C# Job System** — `IJob` · `IJobFor` · `IJobParallelFor` · `JobHandle` (의존성 · `Complete` · `CombineDependencies`), 엔진 작업 스레드에서 실행 (CoreCLR 에 붙은 작업자, 함수 포인터 호출), Profiler 에 작업 표시 | `Unity.Jobs` | M |
-| B-3 | **`[BurstCompile]` 1 단계** — 같은 특성을 받아 HPC# 규칙 (참조형 · `new class` · 관리 배열 금지) 을 Roslyn 분석기가 컴파일 때 검사 → GC 없음 보장, `AggressiveOptimization` 으로 처음부터 최적 JIT | `Unity.Burst` | S |
+| B-3 | **`[BurstCompile]` 1 단계** — 같은 특성을 받아 HPC# 규칙 (참조형 · `new class` · 관리 배열 금지) 을 Roslyn 분석기가 컴파일 때 검사 → GC 없음 보장, `AggressiveOptimization` 으로 처음부터 최적 JIT. **게임 스크립트 Release 빌드** (지금 `dotnet build -c Debug` — 최적화 꺼짐, 플레이어 빌드도 같은 DLL) — Unity 의 Code Optimization (Debug · Release) 과 같은 설정 | `Unity.Burst` | S |
 | B-4 | **`[BurstCompile]` 2 단계 (진짜 네이티브)** — HPC# 작업만 IL → C++ 로 옮겨 프로젝트별 네이티브 DLL (MSVC · clang `-O2 -mavx2`, 안드로이드 arm64 NEON) 로 빌드, 범위 검사 · 별칭 없는 벡터화. 못 옮기는 작업은 JIT 로 (경고) | Burst Compiler | L |
 | B-5 | 엔진과 잇기 — `IJobParallelForTransform` (`TransformAccessArray` → 엔진 Transform SoA 에 바로), `RaycastCommand` · `SpherecastCommand` (Jolt 묶음 질의), `MeshData` 쓰기 | `UnityEngine.Jobs` · `Physics` 명령 | M |
 

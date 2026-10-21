@@ -142,7 +142,7 @@ namespace NovaEngine.Interop
         public delegate* unmanaged<int*, byte*> Scene_Active;            // 활성 씬 경로, buildIndex
         public delegate* unmanaged<int, byte*> Scene_PathAt;             // 빌드 목록 i 번째 경로 (없으면 null)
         public delegate* unmanaged<int> Scene_Count;                     // 빌드 목록 수
-        public delegate* unmanaged<int, int> App_Info;                   // 0 = 플레이어인지
+        public delegate* unmanaged<int, int> App_Info;                   // 0 = 플레이어인지, 1 = Play 중인지
         public delegate* unmanaged<byte*> App_ProductName;
         public delegate* unmanaged<void> App_Quit;
 

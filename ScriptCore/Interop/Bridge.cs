@@ -66,7 +66,23 @@ namespace NovaEngine.Interop
         }
 
         [UnmanagedCallersOnly]
-        public static void BeginFrame() => FrameIndex++;
+        public static void BeginFrame()
+        {
+            FrameIndex++;
+            try { NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.BeginFrame(); }   // Temp 되돌림 · TempJob 수명
+            catch (Exception e) { LogException(e); }
+        }
+
+        // 엔진 시점: kind 0 = Play 끝 (남은 NativeContainer 알림 · 풀기)
+        [UnmanagedCallersOnly]
+        public static void EngineEvent(int kind)
+        {
+            try
+            {
+                if (kind == 0) NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("end of Play");
+            }
+            catch (Exception e) { LogException(e); }
+        }
 
         [UnmanagedCallersOnly]
         public static void FreeString(IntPtr p) { if (p != IntPtr.Zero) Marshal.FreeCoTaskMem(p); }
@@ -147,6 +163,8 @@ namespace NovaEngine.Interop
             finally
             {
                 ctx.Unload();
+                // Play 밖에서는 프레임 시작이 없다 — exec 의 Temp 는 여기서 되돌린다
+                if (Native.Api.App_Info(1) == 0) NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.ResetTemp();
             }
             return Marshal.StringToCoTaskMemUTF8(result);
         }
@@ -167,6 +185,8 @@ namespace NovaEngine.Interop
 
         static void UnloadInternal()
         {
+            try { NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("script reload"); }
+            catch (Exception e) { LogException(e); }
             ScriptRegistry.Clear();
             NovaEngine.UI.UIEvents.Clear();   // 리스너가 게임 어셈블리를 붙잡지 않게
             ScriptableAssets.Clear();

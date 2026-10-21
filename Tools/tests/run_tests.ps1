@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -7049,6 +7049,286 @@ public static class NovaRegionDiff
     finally { Stop-TestEditor $ed | Out-Null }
 }
 
+# C# 고성능 경로 B-1: NovaEngine.Mathematics (float3 · quaternion · float4x4 · math · Random) + NovaEngine.Collections (NativeArray · NativeList · NativeHashMap · ...)
+#  값은 Unity.Mathematics 와 같게 (Euler ZXY · 열 우선 행렬), 안전 검사 (범위 · Dispose 뒤 · Temp 다음 프레임), 누수 알림 (Play 끝 · TempJob 4 프레임)
+function Suite-MathCollections
+{
+    Write-Host '[mathcollections]'
+    $dir = Join-Path $Project 'Assets\MCTest'
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using NovaEngine;
+using NovaEngine.Mathematics;
+using NovaEngine.Collections;
+using MRandom = NovaEngine.Mathematics.Random;
+
+public static class MCTest
+{
+    static List<string> s_Fail;
+    static void Check(bool ok, string what) { if (!ok) s_Fail.Add(what); }
+    static bool Near(float a, float b, float e = 1e-4f) => MathF.Abs(a - b) <= e;
+    static bool Near(float3 a, float3 b, float e = 1e-4f) => math.all(math.abs(a - b) <= e);
+    static bool Throws<E>(Action a) where E : Exception { try { a(); return false; } catch (E) { return true; } catch { return false; } }
+    static string Result(string name) => s_Fail.Count == 0 ? name + ":ok" : name + ":" + string.Join("; ", s_Fail);
+
+    public static string Math()
+    {
+        s_Fail = new List<string>();
+        float3 a = new float3(1, 2, 3), b = math.float3(4, 5, 6);
+        Check(Near(math.dot(a, b), 32), "dot");
+        Check(Near(math.cross(a, b), new float3(-3, 6, -3)), "cross");
+        Check(Near(math.length(new float3(3, 4, 0)), 5), "length");
+        Check(Near(math.normalize(new float3(0, 0, 9)), new float3(0, 0, 1)), "normalize");
+        Check(math.all(math.normalizesafe(float3.zero) == float3.zero), "normalizesafe zero");
+        Check(math.all(a.zyx == new float3(3, 2, 1)) && math.all(a.xy == new float2(1, 2)) && math.all(a.xxyy == new float4(1, 1, 2, 2)), "swizzle get");
+        var c = a; c.xz = new float2(7, 9);
+        Check(math.all(c == new float3(7, 2, 9)), "swizzle set");
+        Check(math.all((a * 2 + 1) == new float3(3, 5, 7)) && math.all(-a == new float3(-1, -2, -3)) && math.all(b / a == new float3(4, 2.5f, 2)), "operators");
+        Check(math.all(math.lerp(a, b, 0.5f) == new float3(2.5f, 3.5f, 4.5f)), "lerp");
+        Check(math.all(math.clamp(new float3(-1, 0.5f, 3), 0f, 1f) == new float3(0, 0.5f, 1)) && math.saturate(2f) == 1f, "clamp saturate");
+        Check(math.all(math.select(a, b, new bool3(true, false, true)) == new float3(4, 2, 6)), "select");
+        Check(math.any(a > 2) && !math.all(a > 2), "compare");
+        Check(math.csum(new int3(1, 2, 3)) == 6 && math.cmax(a) == 3 && math.cmin(a) == 1, "csum cmax cmin");
+        Vector3 v = a; float3 back = v;
+        Check(v.x == 1 && v.z == 3 && math.all(back == a), "Vector3 conversion");
+        Check(math.all((int3)new float3(1.7f, -2.2f, 3) == new int3(1, -2, 3)) && math.all((new int3(5, 6, 7) & 3) == new int3(1, 2, 3)), "int3 cast, bit ops");
+        Check(math.all(new float4(a, 1).xyz == a) && new float4(a, 1).w == 1 && a[2] == 3, "float4(float3, w), indexer");
+        Check(Near(math.smoothstep(0f, 1f, 0.5f), 0.5f) && Near(math.frac(2.25f), 0.25f) && Near(math.degrees(math.PI), 180f), "smoothstep frac degrees");
+
+        // 회전 (라디안): Euler 는 Unity 와 같이 ZXY — Quaternion.Euler(도) 와 같은 회전
+        quaternion q = quaternion.Euler(math.radians(new float3(30, 45, 60)));
+        Quaternion Q = Quaternion.Euler(30, 45, 60);
+        Check(Near(MathF.Abs(math.dot(q.value, new float4(Q.x, Q.y, Q.z, Q.w))), 1f, 1e-5f), "Euler ZXY == Quaternion.Euler");
+        float3 p = new float3(1, 2, 3);
+        Check(Near(math.rotate(q, p), (float3)(Q * new Vector3(1, 2, 3))), "rotate == Quaternion * Vector3");
+        Check(Near(math.mul(q, p), math.mul(new float3x3(q), p)), "float3x3(quaternion)");
+        Check(Near(MathF.Abs(math.dot(q.value, new quaternion(new float3x3(q)).value)), 1f, 1e-5f), "quaternion(float3x3)");
+        Check(Near(math.mul(math.mul(quaternion.RotateY(0.3f), quaternion.RotateX(0.2f)), p), math.rotate(quaternion.RotateY(0.3f), math.rotate(quaternion.RotateX(0.2f), p))), "mul order (b first, then a)");
+        Check(Near(math.angle(quaternion.identity, quaternion.RotateY(math.PI / 2)), math.PI / 2, 1e-3f), "angle");
+        Check(Near(math.angle(quaternion.identity, math.slerp(quaternion.identity, quaternion.RotateY(math.PI / 2), 0.5f)), math.PI / 4, 1e-3f), "slerp half way");
+        Check(Near(math.forward(quaternion.LookRotation(new float3(1, 0, 0), math.up())), new float3(1, 0, 0)), "LookRotation forward");
+        quaternion lr = quaternion.LookRotationSafe(new float3(1, 0, 1), math.up());
+        quaternion LR = Quaternion.LookRotation(new Vector3(1, 0, 1));
+        Check(Near(MathF.Abs(math.dot(lr.value, LR.value)), 1f, 1e-5f), "LookRotationSafe == Quaternion.LookRotation");
+        Check(Near(math.mul(math.inverse(q), q).value.w, 1f, 1e-5f), "inverse quaternion");
+
+        // 행렬 (열 우선, 스칼라 생성자는 행 순서)
+        float4x4 m = float4x4.TRS(new float3(1, 2, 3), q, new float3(2, 2, 2));
+        Check(Near(math.transform(m, p), new float3(1, 2, 3) + math.rotate(q, p * 2)), "TRS transform");
+        float4x4 id = math.mul(m, math.inverse(m));
+        Check(Near(id.c0.xyz, new float3(1, 0, 0)) && Near(id.c1.xyz, new float3(0, 1, 0)) && Near(id.c2.xyz, new float3(0, 0, 1)) && Near(id.c3.xyz, float3.zero) && Near(id.c3.w, 1f), "inverse 4x4");
+        Check(Near(math.determinant(float4x4.Scale(new float3(2, 3, 4))), 24), "determinant");
+        float3x3 r3 = new float3x3(q);
+        Check(Near(math.mul(math.inverse(r3), math.mul(r3, p)), p) && Near(math.mul(math.transpose(r3), math.mul(r3, p)), p), "inverse / transpose 3x3");
+        float4x4 rt = new float4x4(q, new float3(5, 6, 7));
+        Check(Near(math.transform(math.fastinverse(rt), math.transform(rt, p)), p), "fastinverse");
+        var m3 = new float3x3(1, 2, 3, 4, 5, 6, 7, 8, 9);
+        Check(m3.c0.y == 4 && m3.c1.x == 2 && math.all(math.mul(m3, new float3(1, 0, 0)) == new float3(1, 4, 7)), "row-order scalar constructor");
+
+        // 난수: 같은 씨앗 = 같은 수열, 범위, 고르게
+        var r1 = new MRandom(1234); var r2 = new MRandom(1234);
+        bool same = true, range = true; double mean = 0;
+        for (int i = 0; i < 10000; i++)
+        {
+            float f = r1.NextFloat(); same &= f == r2.NextFloat(); range &= f >= 0 && f < 1; mean += f;
+            int n = r1.NextInt(-5, 5); r2.NextInt(-5, 5); range &= n >= -5 && n < 5;
+        }
+        mean /= 10000;
+        Check(same && range && System.Math.Abs(mean - 0.5) < 0.02, "Random (mean " + mean.ToString("F3", CultureInfo.InvariantCulture) + ")");
+        var rd = MRandom.CreateFromIndex(7);
+        Check(Near(math.length(rd.NextFloat3Direction()), 1f, 1e-4f) && Near(math.length(rd.NextQuaternionRotation().value), 1f, 1e-4f), "directions / rotations");
+        Check(math.hash(new float3(1, 2, 3)) == math.hash(new float3(1, 2, 3)) && math.hash(new int2(1, 2)) != math.hash(new int2(2, 1)), "hash");
+        return Result("math");
+    }
+
+    public static string Collections()
+    {
+        s_Fail = new List<string>();
+        int live0 = NativeLeakDetection.LiveAllocations;
+        Check(CollectionChecks.Enabled, "safety checks on in the editor");
+        var arr = new NativeArray<int>(100, Allocator.Persistent);
+        bool zero = true; for (int i = 0; i < arr.Length; i++) zero &= arr[i] == 0;
+        Check(zero && arr.IsCreated && arr.Length == 100, "NativeArray ClearMemory");
+        for (int i = 0; i < arr.Length; i++) arr[i] = i * i;
+        var sub = arr.GetSubArray(10, 5);
+        Check(sub.Length == 5 && sub[0] == 100 && sub[4] == 196, "GetSubArray");
+        int[] managed = arr.ToArray();
+        Check(managed[99] == 9801, "ToArray");
+        var copy = new NativeArray<int>(managed, Allocator.Temp);
+        Check(copy[50] == 2500, "from managed array (Temp)");
+        int sum = 0; foreach (int x in sub) sum += x;
+        Check(sum == 100 + 121 + 144 + 169 + 196, "foreach");
+        Check(Throws<IndexOutOfRangeException>(() => { int x = arr[100]; }) && Throws<IndexOutOfRangeException>(() => arr[-1] = 0), "index out of range");
+        Check(Throws<IndexOutOfRangeException>(() => { int x = sub[5]; }), "sub array range");
+        Check(Throws<InvalidOperationException>(() => sub.Dispose()), "a sub array can not be disposed");
+        var alias = arr;
+        arr.Dispose();
+        Check(!arr.IsCreated, "IsCreated after Dispose");
+        Check(Throws<ObjectDisposedException>(() => { int x = alias[0]; }), "use after Dispose (through a copy)");
+        Check(Throws<ObjectDisposedException>(() => alias.Dispose()), "double Dispose");
+        Check(Throws<ObjectDisposedException>(() => { int x = sub[0]; }), "sub array dies with its owner");
+
+        var vs = new NativeArray<Vector3>(3, Allocator.TempJob);
+        vs[1] = new Vector3(1, 2, 3);
+        var fs = vs.Reinterpret<float3>();
+        Check(math.all(fs[1] == new float3(1, 2, 3)), "Reinterpret Vector3 -> float3");
+        var floats = vs.Reinterpret<float>(12);
+        Check(floats.Length == 9 && floats[5] == 3, "Reinterpret<float>(12)");
+        var ro = vs.AsReadOnly();
+        Check(ro[1].y == 2 && ro.Length == 3, "AsReadOnly");
+        Check(Throws<InvalidOperationException>(() => vs.Reinterpret<float4>()), "Reinterpret size mismatch");
+        vs.Dispose();
+        Check(Throws<ObjectDisposedException>(() => { float3 x = fs[0]; }), "reinterpreted view dies with its owner");
+
+        var list = new NativeList<int>(Allocator.Persistent);
+        for (int i = 0; i < 1000; i++) list.Add(i);
+        list.RemoveAtSwapBack(0);
+        Check(list.Length == 999 && list[0] == 999, "NativeList Add / RemoveAtSwapBack");
+        list.RemoveAt(0);
+        Check(list[0] == 1 && list.Length == 998, "RemoveAt keeps order");
+        list.Insert(0, -1);
+        Check(list[0] == -1 && list[1] == 1, "Insert");
+        list.Sort();
+        Check(list[0] == -1 && list[list.Length - 1] == 998, "Sort");
+        Check(list.Contains(500) && list.IndexOf(2) == 2 && list.BinarySearch(700) == 700, "Contains / IndexOf / BinarySearch");
+        var view = list.AsArray();
+        Check(view.Length == list.Length && view[3] == 3, "AsArray");
+        list.ElementAt(3) += 100;
+        Check(list[3] == 103, "ElementAt (ref)");
+        list.Resize(2000, NativeArrayOptions.ClearMemory);
+        Check(list.Length == 2000 && list[1999] == 0 && list.Capacity >= 2000, "Resize");
+        Check(Throws<IndexOutOfRangeException>(() => { int x = list[2000]; }), "list index out of range");
+        list.Clear();
+        Check(list.IsEmpty, "Clear");
+        list.Dispose();
+
+        var map = new NativeHashMap<int, float>(16, Allocator.Persistent);
+        for (int i = 0; i < 10000; i++) map.Add(i, i * 0.5f);
+        Check(map.Count == 10000 && map.Capacity >= 10000, "NativeHashMap grows");
+        Check(map.TryGetValue(1234, out float v) && v == 617f && !map.ContainsKey(10000), "TryGetValue / ContainsKey");
+        Check(!map.TryAdd(5, 0) && Throws<ArgumentException>(() => map.Add(5, 0)), "duplicate key");
+        for (int i = 0; i < 10000; i += 2) map.Remove(i);
+        Check(map.Count == 5000 && !map.ContainsKey(2) && map.ContainsKey(3), "Remove");
+        map[3] = 99; map[20001] = 1;
+        Check(map[3] == 99 && map.Count == 5001 && Throws<ArgumentException>(() => { float x = map[4]; }), "indexer");
+        double total = 0; int count = 0;
+        foreach (var kv in map) { total += kv.Value; count++; }
+        double expect = 99 - 1.5 + 1; for (int i = 1; i < 10000; i += 2) expect += i * 0.5;
+        Check(count == 5001 && System.Math.Abs(total - expect) < 1e-3, "enumerate");
+        var keys = map.GetKeyArray(Allocator.Temp); var values = map.GetValueArray(Allocator.Temp);
+        Check(keys.Length == 5001 && values.Length == 5001, "GetKeyArray / GetValueArray");
+        map.Dispose();
+        var grid = new NativeHashMap<int2, int>(4, Allocator.Temp);
+        grid[new int2(3, -1)] = 7;
+        Check(grid[new int2(3, -1)] == 7 && !grid.ContainsKey(new int2(-1, 3)), "int2 key");
+        var set = new NativeHashSet<int>(8, Allocator.Temp);
+        Check(set.Add(1) && !set.Add(1) && set.Add(2) && set.Count == 2 && set.Remove(1) && !set.Contains(1), "NativeHashSet");
+
+        var queue = new NativeQueue<int>(Allocator.Persistent);
+        for (int i = 0; i < 10; i++) queue.Enqueue(i);
+        for (int i = 0; i < 7; i++) queue.Dequeue();
+        for (int i = 10; i < 30; i++) queue.Enqueue(i);
+        bool order = true; for (int i = 7; i < 30; i++) order &= queue.Dequeue() == i;
+        Check(order && queue.IsEmpty() && !queue.TryDequeue(out _), "NativeQueue (wraps around)");
+        queue.Dispose();
+        var refv = new NativeReference<int>(5, Allocator.TempJob);
+        refv.Value += 2;
+        Check(refv.Value == 7, "NativeReference");
+        refv.Dispose();
+        Check(NativeLeakDetection.LiveAllocations == live0, "no TempJob / Persistent allocation left (" + NativeLeakDetection.LiveAllocations + " vs " + live0 + ")");
+        return Result("collections");
+    }
+
+    public static string Bench()
+    {
+        const int N = 1 << 20;
+        var managed = new Vector3[N];
+        var native = new NativeArray<float3>(N, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+        for (int i = 0; i < N; i++) { managed[i] = new Vector3(i, 1, 2); native[i] = new float3(i, 1, 2); }
+        var sw = Stopwatch.StartNew();
+        Vector3 acc = Vector3.zero; for (int r = 0; r < 4; r++) for (int i = 0; i < N; i++) acc += managed[i] * 0.5f;
+        double t0 = sw.Elapsed.TotalMilliseconds; sw.Restart();
+        float3 acc2 = 0; for (int r = 0; r < 4; r++) for (int i = 0; i < N; i++) acc2 += native[i] * 0.5f;
+        double t1 = sw.Elapsed.TotalMilliseconds; sw.Restart();
+        float3 acc3 = 0; var span = native.AsReadOnlySpan(); for (int r = 0; r < 4; r++) for (int i = 0; i < span.Length; i++) acc3 += span[i] * 0.5f;
+        double t2 = sw.Elapsed.TotalMilliseconds;
+        native.Dispose();
+        return string.Format(CultureInfo.InvariantCulture, "4M adds: Vector3[] {0:F1} ms, NativeArray<float3> {1:F1} ms, span {2:F1} ms (check {3})", t0, t1, t2, acc.x == acc2.x && acc2.x == acc3.x);
+    }
+}
+
+// 프레임에 걸친 것: Temp 는 다음 프레임에 무효, 남긴 TempJob · Persistent 는 알림
+public class MCFrames : MonoBehaviour
+{
+    public static string tempReport = "";
+    public static NativeArray<int> s_Leak, s_LeakJob;
+    NativeArray<int> m_PrevTemp;
+    int m_Frame;
+    void Update()
+    {
+        m_Frame++;
+        if (m_Frame == 2) { m_PrevTemp = new NativeArray<int>(16, Allocator.Temp); m_PrevTemp[0] = 42; tempReport = "same frame " + m_PrevTemp[0]; }
+        else if (m_Frame == 3)
+        {
+            try { tempReport += "|next frame read " + m_PrevTemp[0]; }
+            catch (ObjectDisposedException) { tempReport += "|next frame ObjectDisposedException"; }
+        }
+        for (int i = 0; i < 64; i++) { var t = new NativeArray<byte>(16 * 1024, Allocator.Temp); t[0] = 1; }   // 1 MB / 프레임 — 쌓이지 않아야
+    }
+    public static string MakeLeak()
+    {
+        s_Leak = new NativeArray<int>(1000, Allocator.Persistent);
+        s_LeakJob = new NativeArray<int>(10, Allocator.TempJob);
+        return NativeLeakDetection.LiveAllocations.ToString();
+    }
+    public static string AfterStop()
+    {
+        try { int x = s_Leak[0]; return "still readable"; }
+        catch (ObjectDisposedException) { return "ObjectDisposedException|" + NativeLeakDetection.LiveAllocations; }
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $dir 'MCTest.cs')
+    $cs = Join-Path $Out 'mathcollections.cs'
+    function Exec([string]$code) { $code | Set-Content -Encoding utf8 $cs; "$((Invoke-NovaJson "exec --file $cs").result)" }
+    $ed = Start-TestEditor
+    try
+    {
+        Wait-Compile
+        Invoke-Nova 'scene new --force' | Out-Null
+        Invoke-Nova 'create empty --name MCF' | Out-Null
+        Invoke-Nova 'add-component MCF MCFrames' | Out-Null
+        Invoke-Nova 'play' | Out-Null
+        Invoke-Nova 'wait 10' | Out-Null
+        $m = Exec 'return MCTest.Math();'
+        Add-Result mathcollections 'Mathematics: float3 ops · swizzles · Vector3 conversion, quaternion (Euler ZXY = Quaternion.Euler), float4x4 TRS · inverse, Random' ($m -eq 'math:ok') $m
+        $c = Exec 'return MCTest.Collections();'
+        Add-Result mathcollections 'Collections: NativeArray (sub array · Reinterpret · ReadOnly) · NativeList · NativeHashMap · NativeHashSet · NativeQueue · NativeReference, safety checks' ($c -eq 'collections:ok') $c
+        $t = Exec 'return MCFrames.tempReport;'
+        Add-Result mathcollections 'Allocator.Temp lives for one frame (next frame: ObjectDisposedException)' ($t -eq 'same frame 42|next frame ObjectDisposedException') $t
+        $live = Exec 'return MCFrames.MakeLeak();'
+        Invoke-Nova 'wait 10' | Out-Null
+        $warn = Invoke-Nova 'log -n 50 --grep "JobTempAlloc"'
+        Add-Result mathcollections 'TempJob older than 4 frames: warning' ("$warn" -match 'maximum lifespan of 4 frames') ("live {0}; {1}" -f $live, (("$warn".Trim() -split "`r?`n") | Select-Object -Last 1))
+        $bench = Exec 'return MCTest.Bench();'
+        Add-Result mathcollections 'benchmark (information only — scripts are a Debug build until B-3)' $true $bench
+        Invoke-Nova 'stop' | Out-Null
+        Invoke-Nova 'wait 5' | Out-Null
+        $leak = Invoke-Nova 'log -n 50 --grep "has not been disposed"'
+        Add-Result mathcollections 'end of Play: undisposed NativeArray reported as a leak and freed' ("$leak" -match 'NativeArray<Int32>' -and "$leak" -match '4040 bytes') ((("$leak".Trim() -split "`r?`n") | Select-Object -Last 1))
+        Invoke-Nova 'play' | Out-Null
+        Invoke-Nova 'wait 5' | Out-Null
+        $after = Exec 'return MCFrames.AfterStop();'
+        Invoke-Nova 'stop' | Out-Null
+        Add-Result mathcollections 'the leaked array is invalid afterwards (no dangling pointer), nothing left alive' ($after -eq 'ObjectDisposedException|0') $after
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+}
+
 function Capture-Scenes([switch]$OpenGL, [switch]$Vulkan, [switch]$D3D12, [string]$dir)
 {
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -9681,6 +9961,7 @@ try
                 'arealight' { Suite-AreaLight }
                 'fogvolume' { Suite-FogVolume }
                 'ssgi' { Suite-Ssgi }
+                'mathcollections' { Suite-MathCollections }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }

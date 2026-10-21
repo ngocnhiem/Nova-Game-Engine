@@ -1289,7 +1289,12 @@ namespace
 			out[i] = roots[i]->GetFileID();
 		return (int)roots.size();
 	}
-	int App_Info(int what) { return what == 0 && Application::IsPlayer() ? 1 : 0; }
+	int App_Info(int what)
+	{
+		if (what == 0) return Application::IsPlayer() ? 1 : 0;
+		if (what == 1) return Application::IsPlaying() ? 1 : 0;
+		return 0;
+	}
 	u8* App_ProductName() { return Ret(BuildSettings::ProductName()); }
 	void App_Quit()
 	{
