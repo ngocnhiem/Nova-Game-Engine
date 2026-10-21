@@ -42,6 +42,9 @@ namespace BuildSettings
 		bool AndroidCustomKeystore = false;
 		std::string AndroidKeystorePath;   // 프로젝트 기준 또는 절대 경로 (.keystore / .jks)
 		std::string AndroidKeyAlias;
+		// C# Code Optimization (Unity 의 Code Optimization · Release / Debug): 게임 스크립트를 dotnet build -c Release (JIT 최적화) 또는 Debug 로.
+		//  Release 가 기본 — Debug 는 최적화를 끈다 (몇 배 느리다). 개발 빌드가 아닌 플레이어는 늘 Release
+		bool ScriptDebugBuild = false;
 	};
 	// 빌드된 게임이 시도할 순서 (Auto 면 엔진 기본 순서)
 	std::vector<GraphicsAPI> PlayerGraphicsAPIs();

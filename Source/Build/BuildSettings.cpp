@@ -77,6 +77,7 @@ namespace
 		s_Player.Height = j.value("defaultScreenHeight", 1080);
 		s_Player.Resizable = j.value("resizableWindow", true);
 		s_Player.RunInBackground = j.value("runInBackground", true);
+		s_Player.ScriptDebugBuild = j.value("scriptOptimization", std::string("Release")) == "Debug";
 		s_Player.AutoGraphicsAPI = j.value("autoGraphicsAPI", true);
 		s_Player.AndroidPackageName = j.value("androidPackageName", std::string());
 		s_Player.AndroidVersionCode = (std::max)(1, j.value("androidVersionCode", 1));
@@ -159,6 +160,7 @@ namespace BuildSettings
 			{ "companyName", p.CompanyName }, { "productName", p.ProductName }, { "version", p.Version },
 			{ "fullscreenMode", (int)p.Mode }, { "defaultScreenWidth", p.Width }, { "defaultScreenHeight", p.Height },
 			{ "resizableWindow", p.Resizable }, { "runInBackground", p.RunInBackground },
+			{ "scriptOptimization", p.ScriptDebugBuild ? "Debug" : "Release" },
 			{ "autoGraphicsAPI", p.AutoGraphicsAPI }, { "graphicsAPIs", ApiKeys(p.GraphicsAPIs) },
 			{ "androidTextureCompression", std::array<const char*, 4>{ "ASTC", "ETC2", "DXT", "None" }[std::clamp(p.AndroidTextureCompression, 0, 3)] }, { "androidPackageName", p.AndroidPackageName },
 			{ "androidVersionCode", p.AndroidVersionCode }, { "androidIcon", p.AndroidIcon },

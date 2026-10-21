@@ -1048,6 +1048,23 @@ namespace CliCommands
 			return true;
 		});
 
+		// C# 스크립트 빌드: Code Optimization (Release · Debug), [BurstCompile] 분석기, 상태
+		Register("scripting", "C# scripts {op: info | set, optimization?: release|debug}", [](const json& a, json& r, std::string& e) {
+			const std::string op = a.value("op", std::string("info"));
+			if (op == "set")
+			{
+				if (!a.contains("optimization")) { e = "set needs --optimization release|debug"; return false; }
+				std::string v = a["optimization"].is_string() ? a["optimization"].get<std::string>() : std::string();
+				for (char& c : v) c = (char)tolower((unsigned char)c);
+				if (v != "release" && v != "debug") { e = "optimization must be release or debug"; return false; }
+				ScriptEngine::SetDebugBuild(v == "debug");
+			}
+			else if (op != "info") { e = "op must be info or set"; return false; }
+			r = { { "optimization", ScriptEngine::IsDebugBuild() ? "debug" : "release" }, { "compiling", ScriptEngine::IsCompiling() },
+				  { "hasErrors", ScriptEngine::HasCompileErrors() }, { "burstAnalyzer", ScriptEngine::HasBurstAnalyzer() }, { "status", ScriptEngine::StatusText() } };
+			return true;
+		});
+
 		// ScriptableObject 데이터 에셋 (.asset — Unity 의 ScriptableObject · CreateAssetMenu): AI 가 클래스 · 에셋 · 값을 다룬다
 		//  classes · list [--class C] · create --class C [--path Assets/Data[/X.asset]] [--values {...}] · get --path P · set --path P --values {...} · resources --path p [--all]
 		Register("scriptable", "ScriptableObject data assets {op: classes | list | create | get | set | resources, class?, path?, values?, all?}", [](const json& a, json& r, std::string& e) {

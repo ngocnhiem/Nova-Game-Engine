@@ -6,6 +6,7 @@
 #include "VolumeProfile.h"
 #include "RenderPipelineSettings.h"
 #include "BuildSettings.h"
+#include "ScriptEngine.h"
 #include "AndroidBuild.h"
 #include "GraphicsSettings.h"
 #include "TagsAndLayers.h"
@@ -133,6 +134,16 @@ namespace
 		ImGui::PushFont(UnityGUI::BoldFont());
 		ImGui::TextUnformatted("Other Settings");
 		ImGui::PopFont();
+		// Configuration (Unity 의 Code Optimization — Release / Debug): 바꾸면 스크립트를 다시 빌드
+		UnityGUI::Label("Configuration", 0, true);
+		{
+			static const char* kOpt[] = { "Release", "Debug" };
+			int opt = p.ScriptDebugBuild ? 1 : 0;
+			if (UnityGUI::Dropdown("C# Code Optimization", &opt, kOpt, 2, 1))
+				ScriptEngine::SetDebugBuild(opt == 1);
+			UnityGUI::HelpBox(p.ScriptDebugBuild ? "Debug: JIT optimizations are off (several times slower) - only for stepping through code. Non-development player builds still compile Release."
+				: "Release: scripts are compiled with optimizations (like Unity's Release mode). [BurstCompile] jobs are checked for HPC# rules at compile time.", false, 1);
+		}
 		UnityGUI::Label("Rendering", 0, true);
 		changed |= UnityGUI::Toggle("Auto Graphics API for Windows", &p.AutoGraphicsAPI, 1);
 		if (p.AutoGraphicsAPI)

@@ -283,7 +283,21 @@ namespace
 		addDir(job->EngineRoot / L"ProjectSetting" / L"fonts", data / L"ProjectSetting" / L"fonts", false);
 		addFile(job->EngineRoot / L"ProjectSetting" / L"icon.ico", data / L"ProjectSetting" / L"icon.ico");
 		addDir(job->ProjectRoot / L"ProjectSettings", data / L"ProjectSettings", false);
-		addFile(job->ProjectRoot / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.dll", data / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.dll");
+		{
+			// C# Code Optimization 이 Debug 여도 개발 빌드가 아니면 Release 로 따로 (Unity 와 같이 플레이어는 늘 최적화)
+			fs::path gameDll = job->ProjectRoot / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.dll";
+			if (ScriptEngine::IsDebugBuild() && !job->Development && fs::exists(gameDll, ec))
+			{
+				job->SetStatus("Compiling scripts (Release)");
+				std::wstring releaseDll;
+				std::string error;
+				if (ScriptEngine::BuildReleaseAssembly((job->ProjectRoot / L"Library" / L"ScriptAssemblies" / L"PlayerRelease").wstring(), releaseDll, error))
+					gameDll = releaseDll;
+				else
+					EditorLog::Write("Build", "Release script build failed, using the editor (Debug) assembly: %s", error.c_str());
+			}
+			addFile(gameDll, data / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.dll");
+		}
 		if (job->Development)
 			addFile(job->ProjectRoot / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.pdb", data / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.pdb");
 

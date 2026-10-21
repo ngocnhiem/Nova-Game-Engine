@@ -64,10 +64,12 @@ namespace NovaEngine.Jobs
     // 잡 형식마다 실행 함수 (JobRecord.Data = 잡 사본) — 제약 호출이라 JIT 가 Execute 를 바로 부른다
     internal static unsafe class IJobProducer<T> where T : struct, IJob
     {
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]   // 처음부터 최적화 JIT (Tier 0 을 건너뛴다)
         internal static void Execute(JobRecord r, int begin, int end) => SysUnsafe.AsRef<T>(r.Data).Execute();
     }
     internal static unsafe class IJobForProducer<T> where T : struct, IJobFor
     {
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]   // 처음부터 최적화 JIT (Tier 0 을 건너뛴다)
         internal static void Execute(JobRecord r, int begin, int end)
         {
             T job = SysUnsafe.Read<T>(r.Data);   // 묶음마다 자기 사본 (Unity 와 같다)
@@ -77,6 +79,7 @@ namespace NovaEngine.Jobs
     }
     internal static unsafe class IJobParallelForProducer<T> where T : struct, IJobParallelFor
     {
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]   // 처음부터 최적화 JIT (Tier 0 을 건너뛴다)
         internal static void Execute(JobRecord r, int begin, int end)
         {
             T job = SysUnsafe.Read<T>(r.Data);
@@ -86,6 +89,7 @@ namespace NovaEngine.Jobs
     }
     internal static unsafe class IJobParallelForBatchProducer<T> where T : struct, IJobParallelForBatch
     {
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]   // 처음부터 최적화 JIT (Tier 0 을 건너뛴다)
         internal static void Execute(JobRecord r, int begin, int end)
         {
             T job = SysUnsafe.Read<T>(r.Data);
@@ -100,6 +104,7 @@ namespace NovaEngine.Jobs
         public static JobHandle Schedule<T>(this T jobData, JobHandle dependsOn = default) where T : struct, IJob
             => JobScheduler.Schedule(ref jobData, &IJobProducer<T>.Execute, 1, 1, false, dependsOn);
         /// <summary>지금 이 스레드에서 바로</summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static void Run<T>(this T jobData) where T : struct, IJob
         {
             JobScheduler.BeginRun(ref jobData, out bool was);
@@ -116,6 +121,7 @@ namespace NovaEngine.Jobs
         /// <summary>여러 작업 스레드에 innerloopBatchCount 개씩</summary>
         public static JobHandle ScheduleParallel<T>(this T jobData, int arrayLength, int innerloopBatchCount, JobHandle dependency) where T : struct, IJobFor
             => JobScheduler.Schedule(ref jobData, &IJobForProducer<T>.Execute, arrayLength, innerloopBatchCount, true, dependency);
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static void Run<T>(this T jobData, int arrayLength) where T : struct, IJobFor
         {
             JobScheduler.BeginRun(ref jobData, out bool was);
@@ -129,6 +135,7 @@ namespace NovaEngine.Jobs
         /// <summary>여러 작업 스레드에 innerloopBatchCount 개씩 (작은 일이면 크게 — 32 ~ 1024)</summary>
         public static JobHandle Schedule<T>(this T jobData, int arrayLength, int innerloopBatchCount, JobHandle dependsOn = default) where T : struct, IJobParallelFor
             => JobScheduler.Schedule(ref jobData, &IJobParallelForProducer<T>.Execute, arrayLength, innerloopBatchCount, true, dependsOn);
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static void Run<T>(this T jobData, int arrayLength) where T : struct, IJobParallelFor
         {
             JobScheduler.BeginRun(ref jobData, out bool was);
@@ -141,6 +148,7 @@ namespace NovaEngine.Jobs
     {
         public static JobHandle ScheduleBatch<T>(this T jobData, int arrayLength, int indicesPerJobCount, JobHandle dependsOn = default) where T : struct, IJobParallelForBatch
             => JobScheduler.Schedule(ref jobData, &IJobParallelForBatchProducer<T>.Execute, arrayLength, indicesPerJobCount, true, dependsOn);
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static void RunBatch<T>(this T jobData, int arrayLength) where T : struct, IJobParallelForBatch
         {
             JobScheduler.BeginRun(ref jobData, out bool was);

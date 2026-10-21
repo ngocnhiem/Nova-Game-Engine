@@ -220,6 +220,14 @@ if(DOTNET_EXE)
         COMMENT "Building NovaScriptCore (C# scripting API)"
         VERBATIM)
     add_dependencies(${ENGINE_CORE} NovaScriptCore)
+    # [BurstCompile] HPC# 규칙 분석기 (Roslyn) → Binaries/Scripting/Analyzers — 에디터가 만드는 Assembly-CSharp.csproj 가 참조한다
+    add_custom_target(NovaBurstAnalyzer ALL
+        COMMAND "${DOTNET_EXE}" build "${CMAKE_CURRENT_SOURCE_DIR}/Tools/NovaBurstAnalyzer/NovaBurstAnalyzer.csproj" -c Release --nologo -v q -nodeReuse:false
+                -o "${CMAKE_CURRENT_SOURCE_DIR}/Binaries/Scripting/Analyzers"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Tools/NovaBurstAnalyzer"
+        COMMENT "Building NovaBurstAnalyzer ([BurstCompile] HPC# rules)"
+        VERBATIM)
+    add_dependencies(NovaScriptCore NovaBurstAnalyzer)
 else()
     message(WARNING ".NET SDK (dotnet) not found - C# scripting will be disabled")
 endif()

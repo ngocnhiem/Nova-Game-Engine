@@ -123,7 +123,10 @@ namespace NovaEngine.Jobs
     internal static unsafe class JobReflection<T> where T : struct
     {
         internal static readonly string Name = JobReflectionUtil.NiceName(typeof(T));
-        internal static readonly byte* ProfName = ProfilerNames.Intern(Name);
+        // Unity 와 같이 [BurstCompile] 잡은 Profiler 에 "(Burst)"
+        internal static readonly bool IsBurst = typeof(T).IsDefined(typeof(NovaEngine.Burst.BurstCompileAttribute), false)
+            || (typeof(T).IsGenericType && typeof(T).GetGenericTypeDefinition() == typeof(DisposeJob<>));
+        internal static readonly byte* ProfName = ProfilerNames.Intern(IsBurst ? Name + " (Burst)" : Name);
         static readonly bool s_HasReferences = RuntimeHelpers.IsReferenceOrContainsReferences<T>();
         static ContainerField[] s_Fields;
         static int[] s_Restrict;   // IJobParallelFor 에서 묶음 범위로 좁힐 NativeArray 의 m_Safety 위치

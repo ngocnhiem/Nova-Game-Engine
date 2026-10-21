@@ -1,13 +1,21 @@
 # NOVA Claude 작업 상태
 
-- 갱신 시각: 2026년 10월 21일 — **C# 고성능 경로 B-2: C# Job System** (같은 지시, 순서대로)
+- 갱신 시각: 2026년 10월 21일 — **C# 고성능 경로 B-3: `[BurstCompile]` 1 단계** (같은 지시, 순서대로)
+  - C# Code Optimization (Unity Code Optimization): `BuildSettings::Player::ScriptDebugBuild` (PlayerSettings.json `scriptOptimization`, Release 기본), `ScriptEngine` 이 `-c Release|Debug` 로 (게임 스크립트 · nova exec, 지문에 구성 · 분석기 시각), `SetDebugBuild` · `BuildReleaseAssembly` (개발 빌드가 아닌 플레이어는 Debug 여도 Release 로 — `BuildPipeline`), Project Settings > Player > Configuration, CLI `scripting info|set --optimization` (`CliCommands` · nova main.cpp)
+  - `Tools/NovaBurstAnalyzer` (Roslyn 4.14 분석기, CMake 대상 → Binaries/Scripting/Analyzers): [BurstCompile] 잡 Execute · 정적 [BurstCompile] 메서드에서 부르는 메서드까지 NB1001 ~ NB1010 (관리 객체 · 관리 배열 · 박싱 · 델리게이트 · 정적 필드 · try/catch · 관리 형식 · 문자열 · lock · 관리 필드), Debug.Log · throw 안은 허락, 특성 인자 제외. Assembly-CSharp.csproj 에 `<Analyzer>`
+  - C#: `ScriptCore/Engine/Burst.cs` (BurstCompile · BurstDiscard · NoAlias · BurstCompiler · FunctionPointer · SharedStatic · CompilerServices), 잡 실행 함수 · Run 에 AggressiveOptimization, Profiler 이름 "(Burst)"
+  - 결과: Release 가 Debug 보다 약 8 배 (잡 Run 120 → 15 ms, float3 고리 10.4 → 1.24 ms, Schedule 2.9 ms). B-1 벤치 116 → 4.3 ms, 보이드 Run 118 → 21 ms
+  - 문서 `docs/BURST.md`, NOVA_CLI · 로드맵 · MATHEMATICS_COLLECTIONS · CSHARP_JOBS 갱신
+  - 검사: burst 6/6, 회귀 behaviour · scriptable · ui · mathcollections · csjobs 43/43
+  - 다음: B-5 엔진과 잇기 (IJobParallelForTransform · TransformAccessArray, RaycastCommand, MeshData), 그다음 B-4 네이티브 컴파일
+  - 다른 담당자: Source/Build (BuildSettings · BuildPipeline), Source/Scripting/ScriptEngine, Source/Editor (CliCommands · ProjectSettingsWindow), Tools/NovaCli/main.cpp, CMakeLists.txt (NovaBurstAnalyzer 대상), 새 Tools/NovaBurstAnalyzer, ScriptCore/Engine (Burst.cs · Jobs)
+- 이전: 2026년 10월 21일 — **C# 고성능 경로 B-2: C# Job System** (같은 지시, 순서대로)
   - `ScriptCore/Engine/Jobs/` (NovaEngine.Jobs): `Jobs.cs` (IJob · IJobFor · IJobParallelFor · IJobParallelForBatch, JobHandle, 예약 확장 · Run, DisposeJob, JobsUtility), `JobScheduler.cs` (C# 전용 작업 스레드 코어 - 1 — 엔진 Job System 은 파이버라 CLR 불가, 기록 풀 · 표 · 의존성 · 컨테이너 잠금 · 충돌 검사 · Complete 돕기 · CompleteAll · 예외 → Console), `JobReflection.cs` (잡 형식마다 컨테이너 필드의 m_Safety 위치를 표시 값으로 찾기, 묶음 범위 좁히기, DeallocateOnJobCompletion)
   - Collections: AtomicSafetyHandle 비트 (kNoWrite · kNoRead · kJob, 노드 JobLocks · Temp 표시), NativeContainer 특성 5 종, 모든 컨테이너 `Dispose(JobHandle)`, ParallelWriter (NativeList · NativeQueue · NativeHashMap · NativeHashSet — 회전 잠금)
   - Profiling: `ScriptCore/Engine/Profiling.cs` (ProfilerMarker · Profiler.BeginSample) + 네이티브 `Prof_Begin/End/SetThreadName` (`ScriptBindings.cpp`, NativeApi 표 끝에 3 개)
   - Bridge: BeginFrame 에 잡 예외 출력, EngineEvent(0) · 다시 읽기 전에 `JobScheduler.CompleteAll`
   - 문서 `docs/CSHARP_JOBS.md`, MATHEMATICS_COLLECTIONS · 로드맵 갱신
   - 검사: csjobs 6/6 (보이드 20 만 × 8: Run 118 ms → Schedule 12.6 ms, 9.4 배), mathcollections 7/7
-  - 다음: B-3 `[BurstCompile]` 1 단계 (게임 스크립트 Release 빌드 설정, AggressiveOptimization, HPC# 분석기)
   - 다른 담당자: ScriptCore (Interop/Bridge · NativeApi, Engine/Collections · 새 Jobs · Profiling.cs), Source/Scripting/ScriptBindings.cpp, Tools/tests/run_tests.ps1
 - 이전: 2026년 10월 21일 — **C# 고성능 경로 B-1: Mathematics · Collections** (사용자 지시: "유니티 Burst 처럼 겁나 빠른 처리" → 로드맵 B-1 → B-2 → B-3 → B-5 → B-4 를 "순서대로 진행")
   - `ScriptCore/Engine/Mathematics/` (NovaEngine.Mathematics — Unity.Mathematics 이름 · 규칙): `Vectors.gen.cs` · `Math.gen.cs` 는 `Tools/gen_mathematics.py` 가 만든다 (float/int/uint/bool 2·3·4, 스위즐, 연산자, Vector · Quaternion 암묵 변환, math 성분 함수), 손으로 `Quaternion.cs` (quaternion · RotationOrder — Euler 라디안 ZXY) · `Matrix.cs` (float2x2 · 3x3 · 4x4 열 우선, mul · inverse · TRS) · `Random.cs`

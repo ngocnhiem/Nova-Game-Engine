@@ -76,10 +76,11 @@ public class Swarm : MonoBehaviour
 
 `Tools/tests/run_tests.ps1 -Only csjobs` — 의존성 사슬 (더하기 → 곱하기 → 합), 여러 스레드 (12 스레드에서 돌았음), IJobFor 차례 · Run, 묶음 잡, ParallelWriter (목록 · 해시 맵), CombineDependencies, DeallocateOnJobCompletion, Dispose(JobHandle), 작업자 0, 안전 검사 9 가지 (위 표), 잡 안 예외 → Console, Profiler 작업자 줄, 배수, 잡이 도는 중 Play 멈추기.
 
-결과 (12 스레드 PC, 게임 스크립트 Debug 빌드): 보이드 20 만 × 8 걸음 — Run (한 스레드) 118 ms, Schedule 12.6 ms → **약 9.4 배**.
+결과 (12 스레드 PC, 에디터): 보이드 20 만 × 8 걸음 — Run (한 스레드) 21.2 ms, Schedule 2.4 ms → **약 8.7 배** (게임 스크립트 Release 빌드 — [Burst 1 단계](BURST.md). Debug 빌드 때는 118 → 12.6 ms).
+
 
 ## 아직
 
-- B-3: `[BurstCompile]` (게임 스크립트 Release 빌드 · `AggressiveOptimization` · HPC# 분석기), B-5: `IJobParallelForTransform` · `RaycastCommand`, B-4: 네이티브 컴파일
+- B-5: `IJobParallelForTransform` · `RaycastCommand`, B-4: 네이티브 컴파일 (B-3 `[BurstCompile]` 1 단계는 [BURST](BURST.md))
 - `IJobParallelForDefer` (NativeList 길이로 나중에), `[NativeSetThreadIndex]`, `JobHandle.ScheduleBatchedJobs` 묶어 늦추기 (지금은 예약 즉시 시작)
 - 엔진 Job System 과 작업자 공유 (지금은 C# 작업자가 따로 — 둘 다 바쁘면 코어를 나눠 쓴다)

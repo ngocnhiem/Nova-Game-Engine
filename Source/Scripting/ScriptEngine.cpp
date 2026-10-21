@@ -6,6 +6,7 @@
 #include "GameViewEditorWindow.h"
 #include "ExternalScriptEditor.h"
 #include "ScriptableAssets.h"
+#include "BuildSettings.h"
 #include <DotNet/hostfxr.h>
 #include <DotNet/coreclr_delegates.h>
 #include <filesystem>
@@ -102,6 +103,17 @@ namespace
 	std::wstring EngineScriptingDir() { return PathManager::GetI()->GetEnginePathW() + L"Binaries\\Scripting\\"; }
 	std::wstring CsprojPath() { return ProjectRoot() + L"Assembly-CSharp.csproj"; }
 	std::wstring OutputDll() { return ProjectRoot() + L"Library\\ScriptAssemblies\\Assembly-CSharp.dll"; }
+	// [BurstCompile] HPC# 규칙 분석기 (ScriptCore/Analyzers — CMake 가 Binaries/Scripting/Analyzers 에)
+	std::wstring BurstAnalyzerDll() { return EngineScriptingDir() + L"Analyzers\\NovaBurstAnalyzer.dll"; }
+	// C# Code Optimization: 지문에도 넣어 바꾸면 다시 빌드 (폴링 스레드도 읽는다)
+	std::atomic<int> s_DebugBuild{ -1 };
+	bool DebugBuild()
+	{
+		if (s_DebugBuild.load() < 0)
+			s_DebugBuild = BuildSettings::GetPlayer().ScriptDebugBuild ? 1 : 0;
+		return s_DebugBuild.load() == 1;
+	}
+	const wchar_t* BuildConfig() { return DebugBuild() ? L"Debug" : L"Release"; }
 	std::wstring HashFile() { return ProjectRoot() + L"Library\\ScriptAssemblies\\sources.hash"; }
 
 	std::string ToUtf8(const std::wstring& w) { return wstring_to_string(w); }
@@ -291,6 +303,7 @@ namespace
 		for (const fs::path& p : files)
 			ss << p.string() << '|' << fs::last_write_time(p, ec).time_since_epoch().count() << '|' << fs::file_size(p, ec) << ';';
 		ss << fs::last_write_time(coreDll, ec).time_since_epoch().count();
+		ss << "|cfg" << s_DebugBuild.load() << '|' << fs::last_write_time(BurstAnalyzerDll(), ec).time_since_epoch().count();
 		return std::to_string(std::hash<std::string>{}(ss.str()));
 	}
 
@@ -359,8 +372,14 @@ namespace
 			<< "      <HintPath>" << coreDll << "</HintPath>\n"
 			<< "      <Private>false</Private>\n"
 			<< "    </Reference>\n"
-			<< "  </ItemGroup>\n"
-			<< "</Project>\n";
+			<< "  </ItemGroup>\n";
+		// [BurstCompile] 잡의 HPC# 규칙 (관리 객체 · 관리 배열 · 박싱 · 람다 · 정적 필드 · try/catch …) 을 컴파일 때 경고로 — Console 에 NB1xxx
+		std::error_code ec;
+		if (fs::exists(BurstAnalyzerDll(), ec))
+			x << "  <ItemGroup>\n"
+			  << "    <Analyzer Include=\"" << ToUtf8(BurstAnalyzerDll()) << "\" />\n"
+			  << "  </ItemGroup>\n";
+		x << "</Project>\n";
 		WriteFileIfChanged(CsprojPath(), x.str());
 	}
 
@@ -429,7 +448,7 @@ namespace
 		const std::wstring dotnet = s_DotnetDir + L"\\dotnet.exe";
 		std::error_code ec;
 		const bool restored = fs::exists(ProjectRoot() + L"obj\\project.assets.json", ec);
-		std::wstring cmd = L"\"" + dotnet + L"\" build \"" + CsprojPath() + L"\" -c Debug --nologo -v q -clp:NoSummary -nodeReuse:false";
+		std::wstring cmd = L"\"" + dotnet + L"\" build \"" + CsprojPath() + L"\" -c " + BuildConfig() + L" --nologo -v q -clp:NoSummary -nodeReuse:false";
 		if (restored)
 			cmd += L" --no-restore";
 		const std::wstring dir = ProjectRoot();
@@ -616,6 +635,7 @@ namespace ScriptEngine
 			return;
 		}
 		ScriptableAssets::RegisterEditor();   // .asset Inspector
+		DebugBuild();   // C# Code Optimization — 지문 (SourcesHash) 보다 먼저
 		const std::vector<fs::path> files = ScriptFiles();
 		if (!files.empty())
 			WriteCsproj();
@@ -812,6 +832,44 @@ namespace ScriptEngine
 	{
 		s_LastHash.clear();
 		s_NextPoll = 0.0;
+	}
+
+	bool IsDebugBuild() { return DebugBuild(); }
+
+	void SetDebugBuild(bool debug)
+	{
+		BuildSettings::Player& p = BuildSettings::GetPlayer();
+		if (p.ScriptDebugBuild != debug)
+		{
+			p.ScriptDebugBuild = debug;
+			BuildSettings::SavePlayer();
+		}
+		if (s_DebugBuild.load() != (debug ? 1 : 0))
+		{
+			s_DebugBuild = debug ? 1 : 0;
+			EditorLog::Write("Script", "code optimization -> %s", debug ? "Debug" : "Release");
+			RequestRecompile();
+		}
+	}
+
+	bool HasBurstAnalyzer() { std::error_code ec; return fs::exists(BurstAnalyzerDll(), ec); }
+
+	// 개발 빌드가 아닌 플레이어: 에디터가 Debug 로 두었어도 Release 로 따로 빌드 (Unity 와 같이 — 플레이어는 늘 최적화)
+	bool BuildReleaseAssembly(const std::wstring& outDir, std::wstring& dllOut, std::string& error)
+	{
+		if (s_DotnetDir.empty()) { error = ".NET SDK not found"; return false; }
+		std::error_code ec;
+		if (!fs::exists(CsprojPath(), ec)) { error = "no Assembly-CSharp.csproj"; return false; }
+		fs::create_directories(outDir, ec);
+		const std::wstring cmd = L"\"" + s_DotnetDir + L"\\dotnet.exe\" build \"" + CsprojPath() + L"\" -c Release -o \"" + outDir + L"\" --nologo -v q -clp:NoSummary -nodeReuse:false";
+		std::string output;
+		if (RunProcess(cmd, ProjectRoot(), output) != 0)
+		{
+			error = output;
+			return false;
+		}
+		dllOut = (fs::path(outDir) / L"Assembly-CSharp.dll").wstring();
+		return fs::exists(dllOut, ec);
 	}
 
 	const std::vector<ClassInfo>& Classes() { return s_Classes; }
@@ -1079,7 +1137,7 @@ namespace ScriptEngine
 			cs << "using System;\nusing System.Linq;\nusing System.Collections.Generic;\nusing NovaEngine;\nusing NovaEngine.UI;\n"
 			   << "public static class NovaExec\n{\n    public static object Run()\n    {\n" << body << "\n    }\n}\n";
 			cs.close();
-			const std::wstring cmd = L"\"" + s_DotnetDir + L"\\dotnet.exe\" build \"" + dir + L"NovaExec.csproj\" -c Debug --nologo -v q -clp:NoSummary -nodeReuse:false";
+			const std::wstring cmd = L"\"" + s_DotnetDir + L"\\dotnet.exe\" build \"" + dir + L"NovaExec.csproj\" -c " + BuildConfig() + L" --nologo -v q -clp:NoSummary -nodeReuse:false";
 			return RunProcess(cmd, dir, output) == 0;
 		};
 		// 식이면 그 값, 아니면(문장) 그대로 + return null. 식으로 안 되면(void 호출 등) 문장으로 한 번 더

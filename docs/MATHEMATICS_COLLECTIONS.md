@@ -84,6 +84,6 @@ Unity 의 `ENABLE_UNITY_COLLECTIONS_CHECKS` 와 같다 — 에디터에서 켜�
 
 ## 아직
 
-- 지금은 성분마다 스칼라 코드. **게임 스크립트가 Debug 로 빌드된다** — 위 벤치마크 (4 백만 덧셈) 는 `Vector3[]` 117 ms · `NativeArray<float3>` 165 ms · Span 129 ms 로 아직 느리다. B-3 (`[BurstCompile]` 1 단계) 에서 Release 빌드 · `AggressiveOptimization` · HPC# 분석기, B-4 에서 네이티브 SIMD
+- 지금은 성분마다 스칼라 코드 (RyuJIT). 위 벤치마크 (4 백만 덧셈) 는 게임 스크립트 Release 빌드 ([Burst 1 단계](BURST.md)) 로 `Vector3[]` 4.3 ms · `NativeArray<float3>` 8.2 ms (에디터 안전 검사 포함) · Span 3.8 ms (Debug 빌드 때 116 · 165 · 129 ms). 네이티브 SIMD 는 B-4
 - `FixedString32Bytes` 같은 고정 문자열, `NativeParallelMultiHashMap`, `NativeBitArray` · `NativeStream`
 - `AsArray` 로 얻은 배열은 목록이 커진 뒤 (버퍼가 옮겨짐) 검사 없이 무효 (Unity 는 따로 잡는다)

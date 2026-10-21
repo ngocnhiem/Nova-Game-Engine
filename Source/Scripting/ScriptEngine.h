@@ -74,6 +74,12 @@ namespace ScriptEngine
 	// Play 에 들어가도 되는지 (컴파일 중이면 끝날 때까지 기다리고, 오류가 있으면 false + Console 안내)
 	bool CanEnterPlayMode();
 	void RequestRecompile();         // 강제로 다시 빌드 (Assets > Refresh 등)
+	// C# Code Optimization (Player Settings): Release (기본 — JIT 최적화) · Debug. 바꾸면 다시 빌드
+	bool IsDebugBuild();
+	void SetDebugBuild(bool debug);
+	bool HasBurstAnalyzer();         // [BurstCompile] HPC# 분석기 (Binaries/Scripting/Analyzers) 가 있는지
+	// 플레이어 빌드용 Release 어셈블리 (outDir/Assembly-CSharp.dll)
+	bool BuildReleaseAssembly(const std::wstring& outDir, std::wstring& dllOut, std::string& error);
 
 	const std::vector<ClassInfo>& Classes();
 	const ClassInfo* FindClass(const std::string& name);   // 이름 또는 전체 이름

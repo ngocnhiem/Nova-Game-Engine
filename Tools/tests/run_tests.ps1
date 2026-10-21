@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'burst', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -7315,7 +7315,7 @@ public class MCFrames : MonoBehaviour
         $warn = Invoke-Nova 'log -n 50 --grep "JobTempAlloc"'
         Add-Result mathcollections 'TempJob older than 4 frames: warning' ("$warn" -match 'maximum lifespan of 4 frames') ("live {0}; {1}" -f $live, (("$warn".Trim() -split "`r?`n") | Select-Object -Last 1))
         $bench = Exec 'return MCTest.Bench();'
-        Add-Result mathcollections 'benchmark (information only — scripts are a Debug build until B-3)' $true $bench
+        Add-Result mathcollections 'benchmark (information only — editor, safety checks on)' $true $bench
         Invoke-Nova 'stop' | Out-Null
         Invoke-Nova 'wait 5' | Out-Null
         $leak = Invoke-Nova 'log -n 50 --grep "has not been disposed"'
@@ -7627,7 +7627,7 @@ public class CJDriver : MonoBehaviour
         Add-Result csjobs 'Profiler: C# job worker threads appear (Timeline rows)' (($names | Where-Object { $_ -like 'C# Job Worker*' }).Count -ge 1) (($names | Where-Object { $_ -like 'C#*' }) -join ', ')
         $bench = (Exec 'return CJTest.Bench();') -split '\|'
         $speed = [double]::Parse($bench[2], [Globalization.CultureInfo]::InvariantCulture)
-        Add-Result csjobs 'boids 200k × 8 steps: Schedule (all workers) vs Run (one thread)' ($speed -gt 1.8) ("Run {0} ms, Schedule {1} ms → x{2} with {3} workers (game scripts are still a Debug build)" -f $bench[0], $bench[1], $bench[2], $bench[3])
+        Add-Result csjobs 'boids 200k × 8 steps: Schedule (all workers) vs Run (one thread)' ($speed -gt 1.8) ("Run {0} ms, Schedule {1} ms → x{2} with {3} workers (editor, safety checks on)" -f $bench[0], $bench[1], $bench[2], $bench[3])
         $long = Exec 'return CJTest.StartLong();'
         Invoke-Nova 'stop' | Out-Null
         Invoke-Nova 'wait 5' | Out-Null
@@ -7637,6 +7637,171 @@ public class CJDriver : MonoBehaviour
         $after = Exec 'return CJTest.AfterStop();'
         Invoke-Nova 'stop' | Out-Null
         Add-Result csjobs 'stopping Play while a job runs: waits for it, then the leak report frees its NativeReference' ("$leak" -match 'NativeReference<Int32>' -and $after -eq 'ObjectDisposedException') ("{0}; after: {1}" -f (("$leak".Trim() -split "`r?`n") | Select-Object -Last 1), $after)
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+}
+
+# C# 고성능 경로 B-3: [BurstCompile] 1 단계 — HPC# 규칙 분석기 (NB1001 ~ NB1010, Burst 와 같은 거부 목록 · 부르는 메서드까지),
+#  C# Code Optimization (Release 기본 · Debug), Burst API (FunctionPointer · SharedStatic), Release 대비 Debug 배수
+function Suite-Burst
+{
+    Write-Host '[burst]'
+    $dir = Join-Path $Project 'Assets\BurstTest'
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using NovaEngine;
+using NovaEngine.Burst;
+using NovaEngine.Collections;
+using NovaEngine.Jobs;
+using NovaEngine.Mathematics;
+
+public static class BurstHelpers
+{
+    public static int s_Counter;
+    public static int Helper(int x) { var list = new List<int>(); return list.Count + x; }   // NB1001 (reached from BadJob.Execute)
+}
+
+[BurstCompile]
+public struct BadJob : IJob
+{
+    public NativeArray<int> data;
+    public void Execute()
+    {
+        int[] tmp = new int[4];                                   // NB1002
+        object boxed = data[0];                                    // NB1003
+        Func<int, int> f = x => x + 1;                             // NB1004
+        BurstHelpers.s_Counter++;                                  // NB1005
+        try { data[0] = tmp[0]; } catch (Exception) { }           // NB1006
+        string s = "n=" + data.Length;                             // NB1008
+        data[1] = BurstHelpers.Helper(3);
+        Debug.Log("allowed " + data[0]);
+        if (data[0] < 0) throw new InvalidOperationException("allowed " + data[0]);
+    }
+}
+
+[BurstCompile]
+public struct FieldJob : IJob { public string name; public void Execute() { } }   // NB1010
+
+[BurstCompile]
+public struct CleanJob : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float3> a;
+    public NativeArray<float3> b;
+    public void Execute(int i) { float3 v = a[i]; for (int k = 0; k < 4; k++) v = math.normalizesafe(v) * 2f + math.up() * 0.5f; b[i] = v; }
+}
+
+public struct NotBurstJob : IJob
+{
+    public NativeArray<int> data;
+    public void Execute() { var l = new List<int>(); int[] t = new int[2]; data[0] = l.Count + t.Length; }
+}
+
+public delegate float LerpFn(float a, float b, float t);
+
+[BurstCompile]
+public static class BurstFunctions
+{
+    [BurstCompile] public static float Lerp3(float a, float b, float t) => a + (b - a) * t;
+    [BurstCompile] public static void Locked() { lock (s_Gate) { } }                    // NB1009
+    static readonly object s_Gate = new object();
+}
+
+public struct BurstCounterKey { }
+
+[BurstCompile]
+public struct CounterJob : IJob
+{
+    public static readonly SharedStatic<int> Counter = SharedStatic<int>.GetOrCreate<BurstCounterKey>();
+    public void Execute() { Counter.Data += 1; }
+}
+
+public static class BurstTest
+{
+    public static string Optimized()
+    {
+        var a = (System.Diagnostics.DebuggableAttribute)Attribute.GetCustomAttribute(typeof(CleanJob).Assembly, typeof(System.Diagnostics.DebuggableAttribute));
+        return a == null ? "no DebuggableAttribute" : (a.IsJITOptimizerDisabled ? "optimizer off" : "optimizer on");
+    }
+
+    public static string Api()
+    {
+        var fp = BurstCompiler.CompileFunctionPointer<LerpFn>(BurstFunctions.Lerp3);
+        float v = fp.Invoke(0f, 10f, 0.25f);
+        CounterJob.Counter.Data = 5;
+        new CounterJob().Schedule().Complete();
+        new CounterJob().Run();
+        return v.ToString(CultureInfo.InvariantCulture) + "|" + CounterJob.Counter.Data + "|" + fp.IsCreated + "|" + BurstCompiler.IsEnabled;
+    }
+
+    public static string Bench()
+    {
+        const int N = 1 << 19;
+        var a = new NativeArray<float3>(N, Allocator.TempJob);
+        var b = new NativeArray<float3>(N, Allocator.TempJob);
+        for (int i = 0; i < N; i++) a[i] = new float3(i, 1, 2);
+        var job = new CleanJob { a = a, b = b };
+        job.Run(N);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int k = 0; k < 3; k++) job.Run(N);
+        double run = sw.Elapsed.TotalMilliseconds / 3;
+        sw.Restart();
+        float3 acc = 0;
+        for (int k = 0; k < 3; k++) for (int i = 0; i < N; i++) acc += a[i] * 0.5f;
+        double loop = sw.Elapsed.TotalMilliseconds / 3;
+        sw.Restart();
+        for (int k = 0; k < 3; k++) job.Schedule(N, 1024).Complete();
+        double parallel = sw.Elapsed.TotalMilliseconds / 3;
+        a.Dispose(); b.Dispose();
+        return string.Format(CultureInfo.InvariantCulture, "{0:F2}|{1:F2}|{2:F2}", run, loop, parallel);
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $dir 'BurstJobs.cs')
+    $cs = Join-Path $Out 'burst.cs'
+    function Exec([string]$code) { $code | Set-Content -Encoding utf8 $cs; "$((Invoke-NovaJson "exec --file $cs").result)" }
+    function Compile
+    {
+        # 빌드가 시작될 때까지 (최대 10 초) 기다린 뒤 끝날 때까지
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while ($sw.Elapsed.TotalSeconds -lt 10) { Invoke-Nova 'wait 5' | Out-Null; $i = Invoke-NovaJson 'scripting info'; if ($i -and $i.compiling) { break } }
+        while ($sw.Elapsed.TotalSeconds -lt 120) { Invoke-Nova 'wait 10' | Out-Null; $i = Invoke-NovaJson 'scripting info'; if ($i -and -not $i.compiling) { return $i } }
+    }
+    function InPlay([string]$code) { Invoke-Nova 'play' | Out-Null; Invoke-Nova 'wait 5' | Out-Null; $r = Exec $code; Invoke-Nova 'stop' | Out-Null; Invoke-Nova 'wait 3' | Out-Null; $r }
+    $ed = Start-TestEditor
+    try
+    {
+        $info = Compile
+        Add-Result burst 'C# Code Optimization defaults to Release, Burst analyzer loaded, warnings do not fail the build' ($info.optimization -eq 'release' -and $info.burstAnalyzer -and -not $info.hasErrors) ("optimization {0}, analyzer {1}, errors {2}" -f $info.optimization, $info.burstAnalyzer, $info.hasErrors)
+        $log = (Invoke-Nova 'log -n 200 --grep "NB10"') -join "`n"
+        $lines = @($log -split "`r?`n" | Where-Object { $_ -match 'BurstJobs\.cs' })
+        $codes = @('NB1001', 'NB1002', 'NB1003', 'NB1004', 'NB1005', 'NB1006', 'NB1008', 'NB1009', 'NB1010')
+        $missing = @($codes | Where-Object { $log -notmatch $_ })
+        $reached = $log -match 'NB1001[^\n]*reached from BadJob\.Execute'
+        # 경고가 없어야 하는 줄: Debug.Log · throw (29 · 30), CleanJob · NotBurstJob (38 ~ 49), Lerp3 (56), SharedStatic 잡 (61 ~ 68) — 특성 줄도
+        $wrongLines = @($lines | Where-Object { $_ -match 'BurstJobs\.cs\((29|30|3[89]|4[0-9]|56|6[1-8]),' })
+        Add-Result burst 'HPC# rules: managed object · managed array · boxing · lambda · static field · try/catch · string building · lock · managed job field (NB1001-NB1010), followed into called methods' ($missing.Count -eq 0 -and $reached -and $wrongLines.Count -eq 0) ("{0} warnings; missing {1}; reached-from {2}; false positives {3}" -f $lines.Count, ($missing -join ','), $reached, (($wrongLines | ForEach-Object { ($_ -split 'warning')[0].Trim() }) -join '; '))
+
+        $opt = InPlay 'return BurstTest.Optimized();'
+        $api = InPlay 'return BurstTest.Api();'
+        Add-Result burst 'Release build: JIT optimizer on; BurstCompiler.CompileFunctionPointer · SharedStatic in a job and Run' ($opt -eq 'optimizer on' -and $api -eq '2.5|7|True|False') ("{0}; api {1}" -f $opt, $api)
+        $rel = (InPlay 'return BurstTest.Bench();') -split '\|'
+
+        Invoke-Nova 'scripting set --optimization debug' | Out-Null
+        $dbgInfo = Compile
+        $optDbg = InPlay 'return BurstTest.Optimized();'
+        $dbg = (InPlay 'return BurstTest.Bench();') -split '\|'
+        Invoke-Nova 'scripting set --optimization release' | Out-Null
+        $back = Compile
+        $inv = [Globalization.CultureInfo]::InvariantCulture
+        $runX = [double]::Parse($dbg[0], $inv) / [math]::Max([double]::Parse($rel[0], $inv), 0.001)
+        $loopX = [double]::Parse($dbg[1], $inv) / [math]::Max([double]::Parse($rel[1], $inv), 0.001)
+        Add-Result burst 'Debug optimization switch recompiles (optimizer off), back to Release' ($dbgInfo.optimization -eq 'debug' -and $optDbg -eq 'optimizer off' -and $back.optimization -eq 'release') ("debug: {0}, back {1}" -f $optDbg, $back.optimization)
+        Add-Result burst 'Release vs Debug: [BurstCompile] job Run and a float3 loop are several times faster' ($runX -gt 1.5 -and $loopX -gt 1.5) ("job Run {0} → {1} ms (x{2:F1}), loop {3} → {4} ms (x{5:F1}), Schedule (all workers) {6} ms" -f $dbg[0], $rel[0], $runX, $dbg[1], $rel[1], $loopX, $rel[2])
+        $player = Get-Content (Join-Path $Project 'ProjectSettings\PlayerSettings.json') -Raw | ConvertFrom-Json
+        Add-Result burst 'the setting is saved in PlayerSettings.json (scriptOptimization)' ($player.scriptOptimization -eq 'Release') ("scriptOptimization {0}" -f $player.scriptOptimization)
     }
     finally { Stop-TestEditor $ed | Out-Null }
 }
@@ -10275,6 +10440,7 @@ try
                 'ssgi' { Suite-Ssgi }
                 'mathcollections' { Suite-MathCollections }
                 'csjobs' { Suite-CsJobs }
+                'burst' { Suite-Burst }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }
