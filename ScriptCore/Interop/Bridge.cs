@@ -73,6 +73,7 @@ namespace NovaEngine.Interop
             {
                 NovaEngine.Jobs.TransformJobs.CompletePending();   // Complete 하지 않은 Transform 잡도 프레임마다 되쓴다
                 NovaEngine.Jobs.JobScheduler.FlushErrors();   // 잡 안 예외 → Console
+                NovaEngine.Burst.Compiler.BurstNative.Flush();   // 네이티브 빌드 결과 · 네이티브 잡의 Debug.Log
                 NovaEngine.Mesh.ReleaseCollected();           // 버려진 C# Mesh 의 네이티브 손잡이
                 NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.BeginFrame();   // Temp 되돌림 · TempJob 수명
             }
@@ -123,6 +124,8 @@ namespace NovaEngine.Interop
                     s_Types[t.FullName] = t;
                     if (!s_Types.ContainsKey(t.Name)) s_Types[t.Name] = t;
                 }
+                try { NovaEngine.Burst.Compiler.BurstNative.OnGameAssemblyLoaded(s_Game, path, Native.Api.App_Info(0) != 0); }   // [BurstCompile] → 네이티브 (에디터: 백그라운드 빌드)
+                catch (Exception e) { LogException(e); }
                 return s_Types.Values.Distinct().Count() + 1;   // 0 = 실패와 구분
             }
             catch (Exception e)
@@ -199,6 +202,7 @@ namespace NovaEngine.Interop
             {
                 NovaEngine.Jobs.JobScheduler.CompleteAll();   // 게임 어셈블리를 내리기 전에 그 코드를 도는 잡이 없게
                 NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("script reload");
+                NovaEngine.Burst.Compiler.BurstNative.Unload();
             }
             catch (Exception e) { LogException(e); }
             ScriptRegistry.Clear();
@@ -220,6 +224,16 @@ namespace NovaEngine.Interop
         {
             try { return a.GetTypes(); }
             catch (ReflectionTypeLoadException e) { return e.Types.Where(t => t != null); }
+        }
+
+        // nova burst (네이티브 [BurstCompile] 상태 · 다시 빌드 · 플레이어 빌드) — JSON 을 받아 JSON 을 돌려준다
+        [UnmanagedCallersOnly]
+        public static IntPtr BurstCommand(byte* jsonUtf8)
+        {
+            string r;
+            try { r = NovaEngine.Burst.Compiler.BurstNative.Command(Native.Str(jsonUtf8)); }
+            catch (Exception e) { r = "{\"error\":" + JsonSerializer.Serialize(e.GetType().Name + ": " + e.Message) + "}"; }
+            return Marshal.StringToCoTaskMemUTF8(r);
         }
 
         // 스크립트 클래스와 Inspector 필드 (JSON)

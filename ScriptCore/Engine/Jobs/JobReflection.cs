@@ -133,6 +133,8 @@ namespace NovaEngine.Jobs
             || (typeof(T).IsGenericType && typeof(T).GetGenericTypeDefinition() == typeof(DisposeJob<>));
         internal static readonly byte* ProfName = ProfilerNames.Intern(IsBurst ? Name + " (Burst)" : Name);
         static readonly bool s_HasReferences = RuntimeHelpers.IsReferenceOrContainsReferences<T>();
+        /// <summary>[BurstCompile] 2 단계: 네이티브 실행 함수 (void*, begin, end, NBContext*) — BurstNative 가 DLL 을 읽고 채운다 (0 = JIT)</summary>
+        internal static IntPtr s_NativePtr = IntPtr.Zero;
         static ContainerField[] s_Fields;
         static int[] s_Restrict;   // IJobParallelFor 에서 묶음 범위로 좁힐 NativeArray 의 m_Safety 위치
         static ContainerField[] s_Deallocate;

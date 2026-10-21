@@ -297,6 +297,21 @@ namespace
 					EditorLog::Write("Build", "Release script build failed, using the editor (Debug) assembly: %s", error.c_str());
 			}
 			addFile(gameDll, data / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.dll");
+			// [BurstCompile] 잡: 안전 검사 없이 네이티브로 (Unity 플레이어와 같다) — 실패하면 그 잡은 JIT
+			if (fs::exists(gameDll, ec))
+			{
+				job->SetStatus("Compiling Burst jobs");
+				const fs::path burstDir = job->ProjectRoot / L"Library" / L"Burst" / L"Player";
+				const json r = json::parse(ScriptEngine::BurstCommand(json{ { "op", "player" }, { "out", wstring_to_string(burstDir.wstring()) } }.dump()), nullptr, false);
+				if (!r.is_discarded() && r.value("ok", false) && fs::exists(burstDir / L"NovaBurst.dll", ec))
+				{
+					addFile(burstDir / L"NovaBurst.dll", data / L"Library" / L"Burst" / L"NovaBurst.dll");
+					addFile(burstDir / L"NovaBurst.json", data / L"Library" / L"Burst" / L"NovaBurst.json");
+					EditorLog::Write("Build", "Burst: %d/%d jobs native (%.1f s)", r.value("native", 0), r.value("jobs", 0), r.value("seconds", 0.0));
+				}
+				else if (!r.is_discarded() && r.value("jobs", 0) > 0)
+					EditorLog::Write("Build", "Burst: native build failed, jobs use the JIT: %s", r.value("error", std::string()).c_str());
+			}
 		}
 		if (job->Development)
 			addFile(job->ProjectRoot / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.pdb", data / L"Library" / L"ScriptAssemblies" / L"Assembly-CSharp.pdb");

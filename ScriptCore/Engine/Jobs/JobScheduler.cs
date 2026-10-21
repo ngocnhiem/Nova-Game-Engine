@@ -595,6 +595,7 @@ namespace NovaEngine.Jobs
         /// <summary>잡 안 예외는 메인 스레드에서 Console 로 (Complete · 프레임 시작)</summary>
         internal static void FlushErrors()
         {
+            if (!t_InJob) NovaEngine.Burst.Compiler.BurstRuntime.FlushLogs();
             if (t_InJob || s_Errors.IsEmpty) return;
             while (s_Errors.TryDequeue(out var e))
             {

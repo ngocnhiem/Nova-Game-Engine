@@ -61,6 +61,7 @@ namespace
 		void(__stdcall* SceneEvent)(int, int, int) = nullptr;   // 선택 (AppEvents.SceneEvent)
 		void(__stdcall* AssetEvent)(int, const char*) = nullptr;   // 선택 (데이터 에셋 캐시)
 		void(__stdcall* EngineEvent)(int) = nullptr;   // 선택 (0 = Play 끝 — NativeContainer 누수 알림)
+		void* (__stdcall* BurstCommand)(const char*) = nullptr;   // 선택 ([BurstCompile] 네이티브 — nova burst · 플레이어 빌드)
 	} m;
 
 	ScriptEngine::State s_State = ScriptEngine::State::NotStarted;
@@ -244,6 +245,8 @@ namespace
 			m.AssetEvent = nullptr;
 		if (load(dll.c_str(), type, L"EngineEvent", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.EngineEvent) < 0)
 			m.EngineEvent = nullptr;
+		if (load(dll.c_str(), type, L"BurstCommand", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.BurstCommand) < 0)
+			m.BurstCommand = nullptr;
 		const wchar_t* appEvents = L"NovaEngine.Interop.AppEvents, NovaScriptCore";
 		if (load(dll.c_str(), appEvents, L"Pause", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.AppPause) < 0)
 			m.AppPause = nullptr;
@@ -1041,6 +1044,13 @@ namespace ScriptEngine
 	std::string GetApiJson()
 	{
 		return IsAvailable() && m.GetApiJson ? TakeString(m.GetApiJson()) : std::string();
+	}
+
+	std::string BurstCommand(const std::string& json)
+	{
+		if (!s_AssemblyLoaded || m.BurstCommand == nullptr)
+			return "{\"error\":\"C# scripts are not loaded\"}";
+		return TakeString(m.BurstCommand(json.c_str()));
 	}
 
 	std::vector<std::wstring> ScriptFilePaths()

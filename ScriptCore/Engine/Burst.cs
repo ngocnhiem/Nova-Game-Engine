@@ -43,8 +43,8 @@ namespace NovaEngine.Burst
     /// <summary>Burst 컴파일러 상태 (Unity.Burst.BurstCompiler)</summary>
     public static class BurstCompiler
     {
-        /// <summary>NOVA 1 단계: 네이티브 Burst 컴파일러는 아직 없다 (HPC# 검사 + 최적화 JIT) — 2 단계에서 true</summary>
-        public static bool IsEnabled => false;
+        /// <summary>네이티브 [BurstCompile] 코드를 쓰는지 (옵션이 켜져 있고 프로젝트 DLL 을 읽었다)</summary>
+        public static bool IsEnabled => Options.EnableBurstCompilation && NovaEngine.Burst.Compiler.BurstNative.Available;
         public static readonly BurstCompilerOptions Options = new BurstCompilerOptions();
 
         /// <summary>정적 [BurstCompile] 함수를 함수 포인터로 (Unity 와 같은 사용법 — NOVA 1 단계는 델리게이트를 그대로 부른다)</summary>
@@ -60,11 +60,12 @@ namespace NovaEngine.Burst
     public sealed class BurstCompilerOptions
     {
         public bool EnableBurstCompilation { get; set; } = true;
+        /// <summary>에디터의 네이티브 코드에 안전 검사 (범위 · Dispose 뒤 · 묶음 범위) — 끄면 다음 빌드부터 빠르다 (Unity 의 Jobs > Burst > Safety Checks)</summary>
         public bool EnableBurstSafetyChecks { get; set; } = true;
         public bool ForceEnableBurstSafetyChecks { get; set; }
         public bool EnableBurstCompileSynchronously { get; set; }
         public bool EnableBurstDebug { get; set; }
-        public bool IsEnabled => EnableBurstCompilation && BurstCompiler.IsEnabled;
+        public bool IsEnabled => BurstCompiler.IsEnabled;
     }
 
     /// <summary>Burst 함수 포인터 (Unity.Burst.FunctionPointer) — <c>Invoke</c> 로 부른다</summary>

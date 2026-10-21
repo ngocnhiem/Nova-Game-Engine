@@ -104,6 +104,8 @@ namespace ScriptEngine
 	void RegenerateProjectFiles();
 	// 엔진 C# API 목록 JSON (NOVA Code 자동 완성용). 스크립팅이 없으면 빈 문자열
 	std::string GetApiJson();
+	// [BurstCompile] 네이티브 (ScriptCore BurstNative.Command): {op: info | compile [wait, force] | set enabled | player out | source} → JSON
+	std::string BurstCommand(const std::string& json);
 	// Assets 아래의 .cs 파일들 (절대 경로, 정렬)
 	std::vector<std::wstring> ScriptFilePaths();
 

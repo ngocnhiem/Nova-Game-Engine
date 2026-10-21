@@ -6,6 +6,7 @@ using NovaEngine.Collections;
 using NovaEngine.Collections.LowLevel.Unsafe;
 using NovaEngine.Interop;
 using NovaEngine.Jobs.LowLevel.Unsafe;
+using NovaEngine.Burst.Compiler;
 using SysUnsafe = System.Runtime.CompilerServices.Unsafe;
 
 namespace NovaEngine.Jobs
@@ -178,6 +179,8 @@ namespace NovaEngine.Jobs
         {
             TransformJobData<T> d = SysUnsafe.Read<TransformJobData<T>>(r.Data);   // 묶음마다 사본
             if (r.Restrict) JobReflection<TransformJobData<T>>.Restrict(ref d, begin, end - 1);
+            IntPtr native = JobReflection<TransformJobData<T>>.s_NativePtr;
+            if (native != IntPtr.Zero && BurstRuntime.Enabled) { BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref d), begin, end); return; }
             TransformAccessData* buffer = d.Transforms.m_Data->Buffer;
             for (int i = begin; i < end; i++) d.Job.Execute(i, new TransformAccess(buffer + i));
         }
@@ -186,6 +189,8 @@ namespace NovaEngine.Jobs
         {
             TransformJobDataReadOnly<T> d = SysUnsafe.Read<TransformJobDataReadOnly<T>>(r.Data);
             if (r.Restrict) JobReflection<TransformJobDataReadOnly<T>>.Restrict(ref d, begin, end - 1);
+            IntPtr native = JobReflection<TransformJobDataReadOnly<T>>.s_NativePtr;
+            if (native != IntPtr.Zero && BurstRuntime.Enabled) { BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref d), begin, end); return; }
             TransformAccessData* buffer = d.Transforms.m_Data->Buffer;
             for (int i = begin; i < end; i++) d.Job.Execute(i, new TransformAccess(buffer + i));
         }

@@ -1065,6 +1065,15 @@ namespace CliCommands
 			return true;
 		});
 
+		// [BurstCompile] 2 단계 (IL → C++ → 네이티브 DLL): 잡마다 native · jit (이유), 다시 빌드, 켜고 끄기, 플레이어용 빌드
+		Register("burst", "native [BurstCompile] jobs {op: info | compile (wait?, force?) | set (enabled) | player (out) | source}", [](const json& a, json& r, std::string& e) {
+			const json out = json::parse(ScriptEngine::BurstCommand(a.dump()), nullptr, false);
+			if (out.is_discarded()) { e = "bad reply from C#"; return false; }
+			if (out.contains("error") && out["error"].is_string()) { e = out["error"].get<std::string>(); return false; }
+			r = out;
+			return true;
+		});
+
 		// ScriptableObject 데이터 에셋 (.asset — Unity 의 ScriptableObject · CreateAssetMenu): AI 가 클래스 · 에셋 · 값을 다룬다
 		//  classes · list [--class C] · create --class C [--path Assets/Data[/X.asset]] [--values {...}] · get --path P · set --path P --values {...} · resources --path p [--all]
 		Register("scriptable", "ScriptableObject data assets {op: classes | list | create | get | set | resources, class?, path?, values?, all?}", [](const json& a, json& r, std::string& e) {

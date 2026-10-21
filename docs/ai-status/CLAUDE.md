@@ -1,12 +1,20 @@
 # NOVA Claude 작업 상태
 
-- 갱신 시각: 2026년 10월 21일 — **C# 고성능 경로 B-5: 잡과 엔진 (Transform · 레이캐스트 · 메시)** (같은 지시, 순서대로)
+- 갱신 시각: 2026년 10월 21일 — **C# 고성능 경로 B-4: `[BurstCompile]` 2 단계 — 네이티브 컴파일** (같은 지시, 순서대로 — 이것으로 B-1 ~ B-5 끝)
+  - `ScriptCore/Engine/BurstCompiler/`: BurstIL (IL 읽기 · 접두), BurstTypes (C++ 형식 · .NET 배치 · static_assert · 정적 값 바이트), BurstMethodCompiler (스택 형식 추적 → 임시 변수 + goto, try/finally, 상수 분기 접기 (CollectionChecks.Enabled), throw 블록 → 실패 표시 후 돌아가기, 실패 검사 표시), BurstIntrinsics (MathF · Math · Unsafe · Interlocked · BitConverter · BitOperations · NativeMemory · Half · Debug.Log · 컨테이너 throw 도우미), BurstUnit (잡마다 namespace `nbjN`, 실패 전파 고정점, 포인터 든 정적 값은 DLL 을 읽은 뒤 채움), BurstNative (잡 찾기 · 앞부분 C++ · vswhere/설치 폴더 → vcvars64 + cl /O2 /arch:AVX2 · 캐시 지문 · 잡마다 따로 컴파일해 C++ 오류 잡 찾기 · NativeLibrary 묶기 · 매니페스트 · CLI · 플레이어)
+  - 잡 실행 함수 · Run: `JobReflection<T>.s_NativePtr` 면 `BurstRuntime.Invoke` (NBContext). Bridge: LoadGameAssembly → OnGameAssemblyLoaded, Unload, BurstCommand. C++: `ScriptEngine::BurstCommand`, CLI `burst`, `BuildPipeline` 이 플레이어용 DLL 을 `_Data/Library/Burst` 에. BurstCompiler.IsEnabled · Options (EnableBurstSafetyChecks), 잡마다 DisableSafetyChecks · FloatMode.Fast (float_control pragma)
+  - 결과: ScriptTest 의 [BurstCompile] 잡 30 개 중 26 개 네이티브 (못 옮긴 것: try/catch · 관리 필드 · Time.deltaTime · …), JIT 와 비트 단위로 같은 결과, 빌드 5 초 (캐시 0 초), 검사 끈 단순 고리 16 배, AoS float3 보이드는 같음
+  - 문서 `docs/BURST.md` (2 단계), README C# 고성능 줄, NOVA_CLI · 로드맵
+  - 검사: burstnative 9/9, 회귀 burst · csjobs · enginejobs · mathcollections 25/25 (burst 스위트의 Release↔Debug 비교는 네이티브를 끄고 잰다)
+  - 플레이어 확인 (한 번, 스위트 밖): `nova build` → `_Data/Library/Burst/NovaBurst.dll` + json, `--hidden` 으로 돌린 게임 로그 `BURST_PLAYER enabled=True d[10]=21 checks=False`
+  - 다음: 사용자 지시 대기 (로드맵 C# 고성능 경로 끝 — 남은 것: FixedString · arm64 · FunctionPointer 네이티브)
+  - 다른 담당자: ScriptCore (새 Engine/BurstCompiler, Jobs · Burst.cs · Interop/Bridge), Source/Scripting/ScriptEngine, Source/Editor/CliCommands, Source/Build/BuildPipeline, Tools/NovaCli/main.cpp, Tools/tests/run_tests.ps1
+- 이전: 2026년 10월 21일 — **C# 고성능 경로 B-5: 잡과 엔진 (Transform · 레이캐스트 · 메시)** (같은 지시, 순서대로)
   - `ScriptCore/Engine/Jobs/EngineJobs.cs`: TransformAccessArray (NativeContainer, ids + 모으기 버퍼) · TransformAccess · IJobParallelForTransform (Schedule · ScheduleReadOnly · Run, 래퍼 `TransformJobData<T>` — `[JobWrapper]` 로 오류 문구는 사용자 잡 이름), Complete 때 되쓰기 (`JobScheduler.SetSyncCallback` — 기록에 메인 스레드 일), 프레임 시작에 남은 Transform 잡 마무리, RaycastCommand · QueryParameters · PhysicsScene
   - `ScriptCore/Engine/Mesh.cs`: Mesh (new · 속성 · 색인 · Recalculate* · bounds · Destroy · Instantiate, 손잡이 캐시 · 파이널라이저 → 메인에서 풀기), MeshFilter (sharedMesh · mesh 사본), Mesh.MeshDataArray · MeshData (SetVertexBufferParams · GetVertexData · 색인 · 서브메시 · 읽기 도우미, Apply · AcquireReadOnly), `NovaEngine.Rendering` 정점 형식들. Components.cs 의 옛 Mesh (BlendShape 만) 를 옮김, RaycastHit.colliderInstanceID
   - 네이티브 `ScriptBindings.cpp`: TR_Gather · TR_Scatter (88 바이트), PH_RaycastBatch (CompleteAsync 뒤 Jobs::ParallelFor, maxHits > 1 은 RaycastAll + 레이어 · 트리거 거르기), MESH_* (손잡이 표, 간격째 속성 쓰기, 노멀 · 탄젠트 계산, 프레임마다 `FlushScriptMeshes`)
   - 문서 `docs/CSHARP_MESH.md`, CSHARP_JOBS (엔진과 잇기) · 로드맵 갱신, Showcase 299
   - 검사: enginejobs 6/6 (빨간 격자 90 %, Transform 2000 개 잡 4.5 ms · 메인 8.4 ms), 회귀 animation · model · csjobs · behaviour 79/80 — model 의 "FBX character = VRM shape" 윤곽 맨 윗줄 20 px (두 캡처 모양은 같다, 가는 머리 가닥 끝 문턱 — 이번 변경과 닿지 않음, 다시 돌리지 않았다)
-  - 다음: B-4 `[BurstCompile]` 2 단계 (HPC# 잡 IL → C++ 네이티브)
   - 다른 담당자: ScriptCore (Engine/Jobs · Mesh.cs · Components · Core, Interop/Bridge · NativeApi), Source/Scripting/ScriptBindings.cpp, Tools/tests/run_tests.ps1
 - 이전: 2026년 10월 21일 — **C# 고성능 경로 B-3: `[BurstCompile]` 1 단계** (같은 지시, 순서대로)
   - C# Code Optimization (Unity Code Optimization): `BuildSettings::Player::ScriptDebugBuild` (PlayerSettings.json `scriptOptimization`, Release 기본), `ScriptEngine` 이 `-c Release|Debug` 로 (게임 스크립트 · nova exec, 지문에 구성 · 분석기 시각), `SetDebugBuild` · `BuildReleaseAssembly` (개발 빌드가 아닌 플레이어는 Debug 여도 Release 로 — `BuildPipeline`), Project Settings > Player > Configuration, CLI `scripting info|set --optimization` (`CliCommands` · nova main.cpp)

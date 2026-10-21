@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'burst', 'enginejobs', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'burst', 'enginejobs', 'burstnative', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -7739,6 +7739,7 @@ public static class BurstTest
 
     public static string Bench()
     {
+        BurstCompiler.Options.EnableBurstCompilation = false;   // C# 최적화 (Release · Debug) 만 잰다 — 네이티브 Burst 는 burstnative 스위트
         const int N = 1 << 19;
         var a = new NativeArray<float3>(N, Allocator.TempJob);
         var b = new NativeArray<float3>(N, Allocator.TempJob);
@@ -7756,6 +7757,7 @@ public static class BurstTest
         for (int k = 0; k < 3; k++) job.Schedule(N, 1024).Complete();
         double parallel = sw.Elapsed.TotalMilliseconds / 3;
         a.Dispose(); b.Dispose();
+        BurstCompiler.Options.EnableBurstCompilation = true;
         return string.Format(CultureInfo.InvariantCulture, "{0:F2}|{1:F2}|{2:F2}", run, loop, parallel);
     }
 }
@@ -7786,7 +7788,7 @@ public static class BurstTest
 
         $opt = InPlay 'return BurstTest.Optimized();'
         $api = InPlay 'return BurstTest.Api();'
-        Add-Result burst 'Release build: JIT optimizer on; BurstCompiler.CompileFunctionPointer · SharedStatic in a job and Run' ($opt -eq 'optimizer on' -and $api -eq '2.5|7|True|False') ("{0}; api {1}" -f $opt, $api)
+        Add-Result burst 'Release build: JIT optimizer on; BurstCompiler.CompileFunctionPointer · SharedStatic in a job and Run' ($opt -eq 'optimizer on' -and $api -like '2.5|7|True|*') ("{0}; api {1} (last = BurstCompiler.IsEnabled — native library loaded)" -f $opt, $api)
         $rel = (InPlay 'return BurstTest.Bench();') -split '\|'
 
         Invoke-Nova 'scripting set --optimization debug' | Out-Null
@@ -8204,6 +8206,320 @@ return "placed";
         $b = (Exec 'return EJTest.Bench();') -split '\|'
         Add-Result enginejobs '2000 transforms: TransformAccessArray job vs main-thread Transform calls (information)' $true ("job {0} ms, main thread {1} ms" -f $b[0], $b[1])
         Invoke-Nova 'stop' | Out-Null
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+}
+
+# C# 고성능 경로 B-4: [BurstCompile] 2 단계 — HPC# 잡의 IL → C++ → MSVC 네이티브 DLL (Library/Burst/지문), 잡 실행 함수가 네이티브로.
+#  JIT 와 같은 결과 (비트 단위), 네이티브 안전 검사 · Debug.Log, 못 옮기는 잡은 이유와 함께 JIT, 캐시, 끄기, 플레이어용 빌드 (검사 없음), 배수
+function Suite-BurstNative
+{
+    Write-Host '[burstnative]'
+    $dir = Join-Path $Project 'Assets\BurstNativeTest'
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using NovaEngine;
+using NovaEngine.Burst;
+using NovaEngine.Collections;
+using NovaEngine.Jobs;
+using NovaEngine.Mathematics;
+
+[BurstCompile]
+public struct NBAdd : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float> a;
+    [ReadOnly] public NativeArray<float> b;
+    public NativeArray<float> r;
+    public void Execute(int i) => r[i] = a[i] * b[i] + 1f;
+}
+
+[BurstCompile]
+public struct NBMath : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float3> p;
+    public NativeArray<float3> o;
+    public float t;
+    public void Execute(int i)
+    {
+        float3 v = p[i];
+        for (int k = 0; k < 4; k++) v = math.normalizesafe(v) * 2f + math.up() * math.sin(t + k);
+        o[i] = v + math.cross(v, new float3(0, 1, 0)) + math.select(float3.zero, new float3(1, 2, 3), v > 0);
+    }
+}
+
+[BurstCompile]
+public struct NBSum : IJob
+{
+    [ReadOnly] public NativeArray<int> d;
+    public NativeReference<long> sum;
+    public void Execute()
+    {
+        long s = 0;
+        for (int i = 0; i < d.Length; i++) s += d[i] * (long)(i % 7) - (d[i] >> 3) + (i ^ 0x55);
+        sum.Value = s;
+    }
+}
+
+[BurstCompile]
+public struct NBQuat : IJobFor
+{
+    public NativeArray<quaternion> q;
+    public NativeArray<float4x4> m;
+    public void Execute(int i)
+    {
+        quaternion r = math.normalize(math.mul(quaternion.RotateY(0.1f * i), quaternion.EulerZXY(new float3(0.3f, 0.2f, 0.1f))));
+        q[i] = r;
+        m[i] = math.mul(float4x4.TRS(new float3(i, 0, 1), r, new float3(1, 2, 1)), math.inverse(float4x4.Translate(new float3(1, 2, 3))));
+    }
+}
+
+[BurstCompile]
+public struct NBRandom : IJobParallelFor
+{
+    public NativeArray<float> o;
+    public void Execute(int i)
+    {
+        var r = NovaEngine.Mathematics.Random.CreateFromIndex((uint)i);
+        o[i] = r.NextFloat() + r.NextFloat3Direction().y + r.NextInt(0, 10);
+    }
+}
+
+[BurstCompile]
+public struct NBList : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<int> input;
+    public NativeList<int>.ParallelWriter output;
+    public void Execute(int i) { if ((input[i] & 3) == 0) output.AddNoResize(input[i]); }
+}
+
+[BurstCompile]
+public struct NBOutOfRange : IJobParallelFor
+{
+    public NativeArray<int> d;
+    public void Execute(int i) { d[i + 1] = i; }
+}
+
+[BurstCompile]
+public struct NBUnsupported : IJob
+{
+    public NativeArray<float> d;
+    public void Execute() { d[0] = Time.deltaTime; }
+}
+
+[BurstCompile]
+public struct NBMove : IJobParallelForTransform
+{
+    public float dy;
+    public void Execute(int index, TransformAccess t) { t.position = t.position + new Vector3(0, dy * index, 0); }
+}
+
+[BurstCompile]
+public struct NBBoids : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float3> pos;
+    public NativeArray<float3> vel;
+    public float dt;
+    public void Execute(int i)
+    {
+        float3 p = pos[i], v = vel[i];
+        for (int k = 0; k < 8; k++) { v += math.normalizesafe(-p) * dt; v *= 0.99f; p += v * dt; }
+        vel[i] = v;
+    }
+}
+
+[BurstCompile]
+public struct NBScale : IJobParallelFor
+{
+    public NativeArray<float> d;
+    public float f;
+    public void Execute(int i) => d[i] = d[i] * f + 0.5f;
+}
+
+[BurstCompile(DisableSafetyChecks = true)]
+public struct NBBoidsFast : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float3> pos;
+    public NativeArray<float3> vel;
+    public float dt;
+    public void Execute(int i)
+    {
+        float3 p = pos[i], v = vel[i];
+        for (int k = 0; k < 8; k++) { v += math.normalizesafe(-p) * dt; v *= 0.99f; p += v * dt; }
+        vel[i] = v;
+    }
+}
+
+[BurstCompile(DisableSafetyChecks = true)]
+public struct NBScaleFast : IJobParallelFor
+{
+    public NativeArray<float> d;
+    public float f;
+    public void Execute(int i) => d[i] = d[i] * f + 0.5f;
+}
+
+[BurstCompile]
+public struct NBLog : IJob
+{
+    public NativeReference<int> ran;
+    public void Execute() { Debug.Log("hello from native burst"); ran.Value = 1; }
+}
+
+[BurstCompile]
+public struct NBTry : IJob
+{
+    public NativeArray<int> d;
+    public void Execute() { try { d[0] = 1; } catch (Exception) { d[0] = 2; } }
+}
+
+public static class NBTest
+{
+    static string Bits(float f) => BitConverter.SingleToUInt32Bits(f).ToString("X8");
+
+    // native 와 JIT 를 같은 입력으로 돌려 비교
+    public static string Compare()
+    {
+        var fails = new List<string>();
+        const int N = 4096;
+        var a = new NativeArray<float>(N, Allocator.TempJob);
+        var b = new NativeArray<float>(N, Allocator.TempJob);
+        var p = new NativeArray<float3>(N, Allocator.TempJob);
+        var ints = new NativeArray<int>(N, Allocator.TempJob);
+        for (int i = 0; i < N; i++) { a[i] = i * 0.37f - 100; b[i] = MathF.Sin(i); p[i] = new float3(i % 13 - 6, i % 7 - 3, i % 5 - 2) * 0.5f; ints[i] = i * 7919 - 50000; }
+        string Run(bool native)
+        {
+            BurstCompiler.Options.EnableBurstCompilation = native;
+            var r1 = new NativeArray<float>(N, Allocator.TempJob);
+            new NBAdd { a = a, b = b, r = r1 }.Schedule(N, 64).Complete();
+            var o = new NativeArray<float3>(N, Allocator.TempJob);
+            new NBMath { p = p, o = o, t = 0.7f }.Schedule(N, 64).Complete();
+            var sum = new NativeReference<long>(Allocator.TempJob);
+            new NBSum { d = ints, sum = sum }.Schedule().Complete();
+            var q = new NativeArray<quaternion>(64, Allocator.TempJob);
+            var mm = new NativeArray<float4x4>(64, Allocator.TempJob);
+            new NBQuat { q = q, m = mm }.Schedule(64, default).Complete();
+            var rnd = new NativeArray<float>(N, Allocator.TempJob);
+            new NBRandom { o = rnd }.Schedule(N, 64).Complete();
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < N; i += 37) sb.Append(Bits(r1[i])).Append(Bits(o[i].x)).Append(Bits(o[i].y)).Append(Bits(o[i].z)).Append(Bits(rnd[i]));
+            sb.Append('|').Append(sum.Value);
+            for (int i = 0; i < 64; i += 5) sb.Append(Bits(q[i].value.x)).Append(Bits(q[i].value.w)).Append(Bits(mm[i].c3.x)).Append(Bits(mm[i].c1.y));
+            r1.Dispose(); o.Dispose(); sum.Dispose(); q.Dispose(); mm.Dispose(); rnd.Dispose();
+            return sb.ToString();
+        }
+        string jit = Run(false), nat = Run(true);
+        BurstCompiler.Options.EnableBurstCompilation = true;
+        a.Dispose(); b.Dispose(); p.Dispose(); ints.Dispose();
+        if (jit == nat) return "same";
+        int at = 0; while (at < jit.Length && at < nat.Length && jit[at] == nat[at]) at++;
+        return "differ at char " + at + ": jit " + jit.Substring(Math.Max(0, at - 8), Math.Min(40, jit.Length - Math.Max(0, at - 8))) + " native " + nat.Substring(Math.Max(0, at - 8), Math.Min(40, nat.Length - Math.Max(0, at - 8)));
+    }
+
+    public static string Bench()
+    {
+        const int N = 1 << 19;
+        var pos = new NativeArray<float3>(N, Allocator.TempJob);
+        var vel = new NativeArray<float3>(N, Allocator.TempJob);
+        var d = new NativeArray<float>(N * 4, Allocator.TempJob);
+        for (int i = 0; i < N; i++) pos[i] = new float3(i % 100 - 50, i % 37, i % 11);
+        double Time1(bool native, Action a) { BurstCompiler.Options.EnableBurstCompilation = native; a(); var sw = System.Diagnostics.Stopwatch.StartNew(); for (int k = 0; k < 5; k++) a(); return sw.Elapsed.TotalMilliseconds / 5; }
+        Action boidsRun = () => new NBBoids { pos = pos, vel = vel, dt = 0.016f }.Run(N);
+        Action scaleRun = () => new NBScale { d = d, f = 1.0001f }.Run(N * 4);
+        Action boidsFast = () => new NBBoidsFast { pos = pos, vel = vel, dt = 0.016f }.Run(N);
+        Action scaleFast = () => new NBScaleFast { d = d, f = 1.0001f }.Run(N * 4);
+        Action boidsPar = () => new NBBoidsFast { pos = pos, vel = vel, dt = 0.016f }.Schedule(N, 1024).Complete();
+        double bj = Time1(false, boidsRun), bn = Time1(true, boidsRun), sj = Time1(false, scaleRun), sn = Time1(true, scaleRun);
+        double bf = Time1(true, boidsFast), sf = Time1(true, scaleFast), bp = Time1(true, boidsPar), bpj = Time1(false, boidsPar);
+        BurstCompiler.Options.EnableBurstCompilation = true;
+        pos.Dispose(); vel.Dispose(); d.Dispose();
+        return string.Format(CultureInfo.InvariantCulture, "boids jit {0:F2} native {1:F2} nochecks {2:F2} (x{3:F1}) | scale jit {4:F2} native {5:F2} nochecks {6:F2} (x{7:F1}) | boids parallel jit {8:F2} native {9:F2} (x{10:F1})", bj, bn, bf, bj / bf, sj, sn, sf, sj / sf, bpj, bp, bpj / bp);
+    }
+
+    public static string LogJob()
+    {
+        var r = new NativeReference<int>(Allocator.TempJob);
+        new NBLog { ran = r }.Schedule().Complete();
+        int v = r.Value; r.Dispose();
+        return v.ToString();
+    }
+
+    public static string Transforms()
+    {
+        var objs = new Transform[64];
+        for (int i = 0; i < objs.Length; i++) { var g = new GameObject("NBT" + i); g.transform.position = new Vector3(i, 0, 0); objs[i] = g.transform; }
+        var arr = new TransformAccessArray(objs);
+        BurstCompiler.Options.EnableBurstCompilation = false;
+        new NBMove { dy = 0.5f }.Schedule(arr).Complete();
+        var jit = new Vector3[objs.Length];
+        for (int i = 0; i < objs.Length; i++) { jit[i] = objs[i].position; objs[i].position = new Vector3(i, 0, 0); }
+        BurstCompiler.Options.EnableBurstCompilation = true;
+        new NBMove { dy = 0.5f }.Schedule(arr).Complete();
+        bool same = true;
+        for (int i = 0; i < objs.Length; i++) same &= objs[i].position == jit[i] && System.Math.Abs(objs[i].position.y - 0.5f * i) < 1e-4f;
+        arr.Dispose();
+        foreach (var t in objs) GameObject.Destroy(t.gameObject);
+        return same ? "same" : "differ";
+    }
+
+    public static string OutOfRange()
+    {
+        var d = new NativeArray<int>(256, Allocator.TempJob);
+        new NBOutOfRange { d = d }.Schedule(256, 16).Complete();
+        d.Dispose();
+        return "done";
+    }
+}
+
+'@ | Set-Content -Encoding utf8 (Join-Path $dir 'NBJobs.cs')
+    $cs = Join-Path $Out 'burstnative.cs'
+    function Exec([string]$code) { $code | Set-Content -Encoding utf8 $cs; $r = Invoke-NovaJson "exec --file $cs"; if ($r) { "$($r.result)" } else { '(exec failed)' } }
+    $ed = Start-TestEditor
+    try
+    {
+        Wait-Compile
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $info = Invoke-NovaJson 'burst compile --wait true --force true'
+        $buildSec = $sw.Elapsed.TotalSeconds
+        $mine = @($info.jobs | Where-Object { $_.job -like 'NB*' })
+        $native = @($mine | Where-Object { $_.status -eq 'native' })
+        $unsup = $mine | Where-Object { $_.job -eq 'NBUnsupported' }
+        $try = $mine | Where-Object { $_.job -eq 'NBTry' }
+        Add-Result burstnative 'MSVC builds the [BurstCompile] jobs into a project DLL (IJob · IJobFor · IJobParallelFor · IJobParallelForTransform · ParallelWriter · math · quaternion · float4x4 · Random)' ($info.state -eq 'ready' -and $info.compiler -and $native.Count -ge 13 -and $info.dll -like '*Library*Burst*NovaBurst.dll') ("{0}: {1}/{2} NB jobs native in {3:F1} s (whole project {4} native), {5}" -f $info.state, $native.Count, $mine.Count, $buildSec, @($info.jobs | Where-Object { $_.status -eq 'native' }).Count, $info.dll)
+        Add-Result burstnative 'jobs that can not be translated stay with the JIT and say why' ($unsup.status -eq 'jit' -and $unsup.reason -match 'Time' -and $try.status -eq 'jit' -and $try.reason -match 'try/catch') ("NBUnsupported: {0}; NBTry: {1}" -f $unsup.reason, $try.reason)
+        Invoke-Nova 'play' | Out-Null
+        Invoke-Nova 'wait 5' | Out-Null
+        $cmp = Exec 'return NBTest.Compare();'
+        $tr = Exec 'return NBTest.Transforms();'
+        Add-Result burstnative 'native results equal the JIT bit for bit (float math · normalizesafe · sin · quaternion · TRS · inverse · Random · long sums) and the transform job' ($cmp -eq 'same' -and $tr -eq 'same') ("values {0}, transforms {1}" -f $cmp, $tr)
+        $o = Exec 'return NBTest.OutOfRange();'
+        $log = (Invoke-Nova 'log -n 40 --grep "native Burst code"') -join "`n"
+        Add-Result burstnative 'native safety checks (editor): write outside the IJobParallelFor batch → the same exception message' ($log -match 'NBOutOfRange' -and $log -match 'restricted IJobParallelFor range') ((($log -split "`r?`n") | Select-Object -Last 1))
+        $lg = Exec 'return NBTest.LogJob();'
+        Invoke-Nova 'wait 2' | Out-Null
+        $hello = Invoke-Nova 'log -n 20 --grep "hello from native burst"'
+        Add-Result burstnative 'Debug.Log with a string literal from native code reaches the Console' ($lg -eq '1' -and "$hello" -match 'hello from native burst') ("ran {0}; {1}" -f $lg, (("$hello".Trim() -split "`r?`n") | Select-Object -Last 1))
+        $b = Exec 'return NBTest.Bench();'
+        $m = [regex]::Match($b, 'scale jit ([\d.]+) native ([\d.]+) nochecks ([\d.]+) \(x([\d.]+)\)')
+        $x = if ($m.Success) { [double]::Parse($m.Groups[4].Value, [Globalization.CultureInfo]::InvariantCulture) } else { 0 }
+        Add-Result burstnative '[BurstCompile(DisableSafetyChecks = true)] simple loop is vectorized (several times the JIT); float3 + branches about the same' ($x -gt 3) $b
+        $isOn = Exec 'return NovaEngine.Burst.BurstCompiler.IsEnabled.ToString();'
+        Invoke-Nova 'burst set --enabled false' | Out-Null
+        $isOff = Exec 'return NovaEngine.Burst.BurstCompiler.IsEnabled.ToString();'
+        Invoke-Nova 'burst set --enabled true' | Out-Null
+        Add-Result burstnative 'BurstCompiler.Options.EnableBurstCompilation switches native code off and on' ($isOn -eq 'True' -and $isOff -eq 'False') ("on {0}, off {1}" -f $isOn, $isOff)
+        Invoke-Nova 'stop' | Out-Null
+        $sw.Restart()
+        $again = Invoke-NovaJson 'burst compile --wait true'
+        Add-Result burstnative 'unchanged scripts reuse the cached DLL (no C++ build)' ($again.state -eq 'ready' -and $again.message -eq 'cached' -and $sw.Elapsed.TotalSeconds -lt 10) ("{0}, {1}, {2:F1} s" -f $again.state, $again.message, $sw.Elapsed.TotalSeconds)
+        $pd = Join-Path $Out 'burst_player'
+        $pl = Invoke-NovaJson ('burst player --out "' + $pd + '"')
+        $man = if (Test-Path (Join-Path $pd 'NovaBurst.json')) { Get-Content (Join-Path $pd 'NovaBurst.json') -Raw | ConvertFrom-Json } else { $null }
+        $noChecks = $man -and -not (@($man.jobs | Where-Object { $_.checks }).Count)
+        $junk = @(Get-ChildItem $pd -Filter 'probe*' -ErrorAction SilentlyContinue).Count
+        Add-Result burstnative 'player build: native DLL without safety checks + manifest (copied into the build by the Build pipeline)' ($pl.ok -and (Test-Path (Join-Path $pd 'NovaBurst.dll')) -and $noChecks -and $pl.native -ge $native.Count -and $junk -eq 0) ("ok {0}, {1}/{2} native, {3:F1} s, no checks {4}" -f $pl.ok, $pl.native, $pl.jobs, $pl.seconds, $noChecks)
     }
     finally { Stop-TestEditor $ed | Out-Null }
 }
@@ -10844,6 +11160,7 @@ try
                 'csjobs' { Suite-CsJobs }
                 'burst' { Suite-Burst }
                 'enginejobs' { Suite-EngineJobs }
+                'burstnative' { Suite-BurstNative }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }

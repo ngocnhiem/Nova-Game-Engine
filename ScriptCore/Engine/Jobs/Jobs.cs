@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using NovaEngine.Collections;
 using NovaEngine.Jobs.LowLevel.Unsafe;
+using NovaEngine.Burst.Compiler;
 using SysUnsafe = System.Runtime.CompilerServices.Unsafe;
 
 namespace NovaEngine.Jobs
@@ -65,7 +66,12 @@ namespace NovaEngine.Jobs
     internal static unsafe class IJobProducer<T> where T : struct, IJob
     {
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]   // 처음부터 최적화 JIT (Tier 0 을 건너뛴다)
-        internal static void Execute(JobRecord r, int begin, int end) => SysUnsafe.AsRef<T>(r.Data).Execute();
+        internal static void Execute(JobRecord r, int begin, int end)
+        {
+            IntPtr native = JobReflection<T>.s_NativePtr;
+            if (native != IntPtr.Zero && BurstRuntime.Enabled) { BurstRuntime.Invoke(native, r.Data, 0, 1); return; }
+            SysUnsafe.AsRef<T>(r.Data).Execute();
+        }
     }
     internal static unsafe class IJobForProducer<T> where T : struct, IJobFor
     {
@@ -74,6 +80,8 @@ namespace NovaEngine.Jobs
         {
             T job = SysUnsafe.Read<T>(r.Data);   // 묶음마다 자기 사본 (Unity 와 같다)
             if (r.Restrict) JobReflection<T>.Restrict(ref job, begin, end - 1);
+            IntPtr native = JobReflection<T>.s_NativePtr;
+            if (native != IntPtr.Zero && BurstRuntime.Enabled) { BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref job), begin, end); return; }
             for (int i = begin; i < end; i++) job.Execute(i);
         }
     }
@@ -84,6 +92,8 @@ namespace NovaEngine.Jobs
         {
             T job = SysUnsafe.Read<T>(r.Data);
             if (r.Restrict) JobReflection<T>.Restrict(ref job, begin, end - 1);
+            IntPtr native = JobReflection<T>.s_NativePtr;
+            if (native != IntPtr.Zero && BurstRuntime.Enabled) { BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref job), begin, end); return; }
             for (int i = begin; i < end; i++) job.Execute(i);
         }
     }
@@ -94,6 +104,8 @@ namespace NovaEngine.Jobs
         {
             T job = SysUnsafe.Read<T>(r.Data);
             if (r.Restrict) JobReflection<T>.Restrict(ref job, begin, end - 1);
+            IntPtr native = JobReflection<T>.s_NativePtr;
+            if (native != IntPtr.Zero && BurstRuntime.Enabled) { BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref job), begin, end); return; }
             job.Execute(begin, end - begin);
         }
     }
@@ -108,7 +120,8 @@ namespace NovaEngine.Jobs
         public static void Run<T>(this T jobData) where T : struct, IJob
         {
             JobScheduler.BeginRun(ref jobData, out bool was);
-            try { jobData.Execute(); }
+            IntPtr native = JobReflection<T>.s_NativePtr;
+            try { if (native != IntPtr.Zero && BurstRuntime.Enabled) BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref jobData), 0, 1); else jobData.Execute(); }
             finally { JobScheduler.EndRun(was); }
         }
     }
@@ -125,7 +138,8 @@ namespace NovaEngine.Jobs
         public static void Run<T>(this T jobData, int arrayLength) where T : struct, IJobFor
         {
             JobScheduler.BeginRun(ref jobData, out bool was);
-            try { for (int i = 0; i < arrayLength; i++) jobData.Execute(i); }
+            IntPtr native = JobReflection<T>.s_NativePtr;
+            try { if (native != IntPtr.Zero && BurstRuntime.Enabled) BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref jobData), 0, arrayLength); else for (int i = 0; i < arrayLength; i++) jobData.Execute(i); }
             finally { JobScheduler.EndRun(was); }
         }
     }
@@ -139,7 +153,8 @@ namespace NovaEngine.Jobs
         public static void Run<T>(this T jobData, int arrayLength) where T : struct, IJobParallelFor
         {
             JobScheduler.BeginRun(ref jobData, out bool was);
-            try { for (int i = 0; i < arrayLength; i++) jobData.Execute(i); }
+            IntPtr native = JobReflection<T>.s_NativePtr;
+            try { if (native != IntPtr.Zero && BurstRuntime.Enabled) BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref jobData), 0, arrayLength); else for (int i = 0; i < arrayLength; i++) jobData.Execute(i); }
             finally { JobScheduler.EndRun(was); }
         }
     }
@@ -152,7 +167,8 @@ namespace NovaEngine.Jobs
         public static void RunBatch<T>(this T jobData, int arrayLength) where T : struct, IJobParallelForBatch
         {
             JobScheduler.BeginRun(ref jobData, out bool was);
-            try { jobData.Execute(0, arrayLength); }
+            IntPtr native = JobReflection<T>.s_NativePtr;
+            try { if (native != IntPtr.Zero && BurstRuntime.Enabled) BurstRuntime.Invoke(native, SysUnsafe.AsPointer(ref jobData), 0, arrayLength); else jobData.Execute(0, arrayLength); }
             finally { JobScheduler.EndRun(was); }
         }
     }
