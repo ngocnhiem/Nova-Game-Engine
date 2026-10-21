@@ -40,6 +40,7 @@
 #include "ScriptEngine.h"
 #include "ScriptableAssets.h"
 #include "CSharpScript.h"
+#include "LocalVolumetricFog.h"
 #include "PostProcessingManager.h"
 #include "MotionVectors.h"
 #include "BuildPipeline.h"
@@ -401,6 +402,12 @@ namespace
 		if (type == "spot-light") return named(GameObjectFactory::CreateSpotLight());
 		if (type == "area-light" || type == "rectangle-light") return named(GameObjectFactory::CreateAreaLight());
 		if (type == "disc-light") return named(GameObjectFactory::CreateAreaLight("Disc Light", true));
+		if (type == "local-volumetric-fog" || type == "fog-volume")
+		{
+			GameObject* o = GameObjectFactory::CreateEmpty("Local Volumetric Fog");
+			o->AddComponent<LocalVolumetricFog>();
+			return named(o);
+		}
 		if (type == "global-light-2d" || type == "spot-light-2d")
 		{
 			// 2D 빛 (Light 2D): Global = 바탕 밝기, Spot = 반지름 · 원뿔
@@ -470,7 +477,7 @@ namespace
 			EditorLog::Write("CLI", "%s", note.c_str());
 			return g;
 		}
-		error = "unknown type '" + typeIn + "' (empty, cube, sphere, capsule, cylinder, plane, quad, directional-light, point-light, spot-light, area-light, disc-light, global-light-2d, spot-light-2d, "
+		error = "unknown type '" + typeIn + "' (empty, cube, sphere, capsule, cylinder, plane, quad, directional-light, point-light, spot-light, area-light, disc-light, local-volumetric-fog, global-light-2d, spot-light-2d, "
 			"camera, terrain, tree, rock, rock-scatter, open-world {size}, pcg-volume {graph}, ocean, lake, river, particle-system, visual-effect, audio-source, volume, character, third-person-character, car, ragdoll-target)";
 		return nullptr;
 	}

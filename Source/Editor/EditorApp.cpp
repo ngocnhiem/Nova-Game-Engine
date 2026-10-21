@@ -434,7 +434,7 @@ void EditorApp::DrawAtmosphere(const void* params, CXMMATRIX viewProj, const XMF
 		return;
 	// 볼륨 안개: 해 (방향광 0) 의 캐스케이드 그림자 — 물과 같은 값
 	const auto* frame = static_cast<const ShadowRenderer::FrameData*>(shadowFrame);
-	if (p.VolumetricAlbedo.w > 0.5f && shadowMap && frame && frame->DirCount > 0 && frame->DirData[0].x > 0.0f)
+	if ((p.VolumetricAlbedo.w > 0.5f || p.LocalFogCount > 0) && shadowMap && frame && frame->DirCount > 0 && frame->DirData[0].x > 0.0f)
 	{
 		p.SunShadow = shadowMap->DepthMapSRV(LightType::Directional);
 		for (int c = 0; c < 8; ++c)
@@ -763,7 +763,8 @@ void EditorApp::RenderGameView(GfxRenderTargetView* renderTargetView, const Game
 	const bool ssaoReadsMotion = ssaoSettings.Enabled && ssaoSettings.TemporalAccumulation;
 	const int debugMode = probe ? RenderingDebug::None : RenderingDebug::Get().Mode;
 	const bool debugReadsMotion = debugMode == RenderingDebug::MotionVectors;
-	const AtmospherePass::Params atmosphere = AtmospherePass::FromStack(stack, dirLights.empty() ? nullptr : &dirLights[0]);
+	AtmospherePass::Params atmosphere = AtmospherePass::FromStack(stack, dirLights.empty() ? nullptr : &dirLights[0]);
+	AtmospherePass::GatherLocalFog(atmosphere, d.Position, false);   // Local Volumetric Fog (HDRP)
 	XMFLOAT4 indirect = XMFLOAT4(1, 1, 1, 1);
 	GfxShaderResourceView* motionVectors = nullptr;
 	GfxShaderResourceView* ssaoMap = probe ? SpriteBatch::WhiteTexture() : ssao->AmbientSRV().Get();
@@ -1196,7 +1197,10 @@ void EditorApp::_Editor_OnSceneRender(GfxRenderTargetView* renderTargetView, Edi
 	const bool wire = RenderManager::GetI()->WireFrameMode;
 	AtmospherePass::Params atmosphere;
 	if (SceneToolbar::FogVisible() && !wire)
+	{
 		atmosphere = AtmospherePass::FromStack(stack, dirLights.empty() ? nullptr : &dirLights[0]);
+		AtmospherePass::GatherLocalFog(atmosphere, camera->GetPosition(), true);
+	}
 	XMFLOAT4 indirect = XMFLOAT4(1, 1, 1, 1);
 	GfxShaderResourceView* sceneMotion = nullptr;
 

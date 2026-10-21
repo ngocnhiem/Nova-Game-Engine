@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -6745,6 +6745,149 @@ public static class NovaPatchMean
     finally { Stop-TestEditor $ed | Out-Null }
 }
 
+# Local Volumetric Fog (HDRP): 상자 · 타원체 안의 안개 — 앞에서 본 그림의 켬 · 끔 차이
+function Suite-FogVolume
+{
+    Write-Host '[fogvolume]'
+    if (-not ('NovaRegionDiff' -as [type]))
+    {
+        Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+using System; using System.Drawing; using System.Drawing.Imaging; using System.Runtime.InteropServices;
+public static class NovaRegionDiff
+{
+    static byte[] Read(string path, out int w, out int h, out int stride)
+    {
+        using (var bmp = new Bitmap(path))
+        {
+            w = bmp.Width; h = bmp.Height;
+            var d = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            stride = d.Stride;
+            var b = new byte[d.Stride * h];
+            Marshal.Copy(d.Scan0, b, 0, b.Length);
+            bmp.UnlockBits(d);
+            return b;
+        }
+    }
+    // 화면 비율 사각형 (x0..x1, y0..y1 은 0~1) 안: [평균 |밝기 차|, 밝기 차의 표준 편차, 평균 (R−B) 차, 평균 밝기 (b)]
+    public static double[] Diff(string a, string b, double x0, double y0, double x1, double y1)
+    {
+        int w, h, s, w2, h2, s2;
+        var A = Read(a, out w, out h, out s); var B = Read(b, out w2, out h2, out s2);
+        double sum = 0, sum2 = 0, rb = 0, lb = 0; int n = 0;
+        for (int y = (int)(y0 * h); y < (int)(y1 * h); y++)
+            for (int x = (int)(x0 * w); x < (int)(x1 * w); x++)
+            {
+                int i = y * s + x * 4;
+                double la = (A[i] + A[i + 1] + A[i + 2]) / 3.0, lB = (B[i] + B[i + 1] + B[i + 2]) / 3.0;
+                double d = lB - la;
+                sum += Math.Abs(d); sum2 += d * d; n++;
+                rb += (B[i + 2] - B[i]) - (A[i + 2] - A[i]);
+                lb += lB;
+            }
+        if (n == 0) return new double[] { 0, 0, 0, 0 };
+        double mean = sum / n;
+        double signedMean = 0;
+        for (int y = (int)(y0 * h); y < (int)(y1 * h); y++)
+            for (int x = (int)(x0 * w); x < (int)(x1 * w); x++)
+            { int i = y * s + x * 4; signedMean += (B[i] + B[i + 1] + B[i + 2]) / 3.0 - (A[i] + A[i + 1] + A[i + 2]) / 3.0; }
+        signedMean /= n;
+        double var = sum2 / n - signedMean * signedMean;
+        return new double[] { mean, Math.Sqrt(Math.Max(var, 0)), rb / n, lb / n };
+    }
+}
+"@
+    }
+    $script:fvShot = 0
+    function Shot
+    {
+        $script:fvShot++
+        $path = Join-Path $Out ("fogvolume_{0}.png" -f $script:fvShot)
+        Invoke-Nova 'wait 8' | Out-Null
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        do { $r = Invoke-NovaJson ('screenshot "' + $path + '" --view game'); if (-not $r) { Start-Sleep -Milliseconds 2000 } } while (-not $r -and $sw.Elapsed.TotalSeconds -lt 600)
+        $path
+    }
+    # 검은 바닥 · 뒤 벽, 해 끔 — 하늘 환경광을 받은 안개가 어두운 배경 위에 또렷하게
+    $dir = Join-Path $Project 'Assets\FogTest'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $mat = Get-Content (Join-Path $Project 'Assets\Materials\Floor.mat') -Raw | ConvertFrom-Json
+    $mat.BaseColor = @(0.02, 0.02, 0.02, 1); $mat.Smoothness = 0.0
+    $mat | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $dir 'Black.mat')
+    function DarkScene
+    {
+        Invoke-Nova 'scene new --force' | Out-Null
+        Invoke-Nova 'set "Directional Light" --component Light --values "{\"intensity\":0}"' | Out-Null
+        Invoke-Nova 'create plane --name Ground --scale 3,1,3' | Out-Null
+        Invoke-Nova 'create cube --name Wall --position 0,4,4.5 --scale 16,9,0.5' | Out-Null
+        foreach ($o in 'Ground', 'Wall') { Invoke-Nova ('set ' + $o + ' --component MeshRenderer --values "{\"m_MaterialPaths\":[\"Assets/FogTest/Black.mat\"]}"') | Out-Null }
+        Invoke-Nova 'set "Main Camera" --position 0,1,-4 --rotation 0,0,0' | Out-Null
+    }
+    function SetF([string]$json) { Invoke-Nova ('set Fog --component LocalVolumetricFog --values "' + ($json -replace '"', '\"') + '"') | Out-Null }
+    # 안개 상자가 덮는 화면 (카메라 (0,1,-4) 앞을 봄, 상자 z 0.5 ~ 3.5 · 높이 0 ~ 2) 와 그 위 (광선이 상자 위로 지나는 하늘)
+    function InFog($a, $b) { [NovaRegionDiff]::Diff($a, $b, 0.30, 0.42, 0.70, 0.70) }
+    function Above($a, $b) { [NovaRegionDiff]::Diff($a, $b, 0.30, 0.00, 0.70, 0.12) }
+
+    $ed = Start-TestEditor
+    try
+    {
+        DarkScene
+        Invoke-Nova 'create local-volumetric-fog --name Fog --position 0,1,2' | Out-Null
+        SetF '{"size":[6,2,3],"fogDistance":2,"blendDistance":0.3,"albedo":[0.9,0.9,0.9],"enabled":false}'
+        Invoke-Nova 'window game' | Out-Null
+        $off = Shot
+        SetF '{"enabled":true}'
+        $on = Shot
+        $a = InFog $off $on; $u = Above $off $on
+        Add-Result fogvolume 'the fog changes only what is seen through its box (above it the sky stays the same)' ($a[0] -gt 4 -and $u[0] -lt 1) ("through the box {0:F1}, above it {1:F2} (mean |luma change|)" -f $a[0], $u[0])
+        SetF '{"fogDistance":0.5}'
+        $dense = Shot
+        $d = InFog $off $dense
+        Add-Result fogvolume 'Fog Distance 0.5 m is denser than 2 m' ($d[0] -gt $a[0] * 1.2) ("0.5 m {0:F1}, 2 m {1:F1}" -f $d[0], $a[0])
+        SetF '{"fogDistance":2,"maskMode":"Noise","noiseStrength":1,"noiseTiling":0.6}'
+        $noise = Shot
+        # 안개 안쪽만 (가장자리 · 바닥 경계 빼고): 고른 안개는 고르고, 노이즈는 얼룩진다
+        $n = [NovaRegionDiff]::Diff($off, $noise, 0.30, 0.36, 0.68, 0.58); $e = [NovaRegionDiff]::Diff($off, $on, 0.30, 0.36, 0.68, 0.58)
+        Add-Result fogvolume 'Mask Mode Noise makes it patchy (more variation than the even fog)' ($n[1] -gt $e[1] * 1.5 -and $n[1] -gt 8) ("std of change inside the box: noise {0:F1}, even {1:F1}" -f $n[1], $e[1])
+        SetF '{"maskMode":"None","shape":"Ellipsoid"}'
+        $ell = Shot
+        $corner = [NovaRegionDiff]::Diff($off, $on, 0.22, 0.32, 0.27, 0.37); $cornerE = [NovaRegionDiff]::Diff($off, $ell, 0.22, 0.32, 0.27, 0.37)
+        Add-Result fogvolume 'Ellipsoid leaves the box corners clear' ($cornerE[0] -lt $corner[0] * 0.6) ("upper-left corner: box {0:F1}, ellipsoid {1:F1}" -f $corner[0], $cornerE[0])
+        SetF '{"shape":"Box","distanceFadeStart":0,"distanceFadeEnd":1}'
+        $faded = Shot
+        $f = InFog $off $faded
+        Add-Result fogvolume 'Distance Fade: past Distance Fade End (camera 2.5 m away, end 1 m) the fog is gone' ($f[0] -lt 1) ("change {0:F2}" -f $f[0])
+        SetF '{"distanceFadeStart":1000,"distanceFadeEnd":1200}'
+        # 안개 속의 점광 (주황): 빛 둘레의 안개가 주황으로 빛난다 (안개 없이 같은 빛과 비교)
+        Invoke-Nova 'create point-light --name Lamp --position -1.2,1.4,1.6' | Out-Null
+        Invoke-Nova 'set Lamp --component Light --values "{\"pointLightDiffuse\":[1,0.5,0.15,1],\"intensity\":1.5,\"pointLightRange\":4}"' | Out-Null
+        $lampFog = Shot
+        SetF '{"enabled":false}'
+        $lampAir = Shot
+        $glow = [NovaRegionDiff]::Diff($on, $lampFog, 0.34, 0.37, 0.48, 0.51); $air = [NovaRegionDiff]::Diff($off, $lampAir, 0.34, 0.37, 0.48, 0.51)
+        Add-Result fogvolume 'a point light inside the fog lights it up (orange glow around the lamp, not without the fog)' ($glow[2] -gt $air[2] + 3 -and $glow[2] -gt 4) ("R-B gain around the lamp: in fog +{0:F1}, without fog +{1:F1}" -f $glow[2], $air[2])
+        SetF '{"enabled":true}'
+        $j = Invoke-NovaJson 'get Fog --component LocalVolumetricFog'
+        Add-Result fogvolume 'saved values (HDRP names: fogDistance, size, blendDistance, maskMode ...)' ($j.type -eq 'LocalVolumetricFog' -and $j.size[0] -eq 6 -and $j.fogDistance -eq 2 -and $j.shape -eq 'Box') ("type {0}, size {1}, fogDistance {2}, shape {3}" -f $j.type, ($j.size -join ','), $j.fogDistance, $j.shape)
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+
+    # OpenGL: 같은 셰이더 (DXC → GLSL)
+    $ed = Start-TestEditor -OpenGL
+    try
+    {
+        DarkScene
+        Invoke-Nova 'create local-volumetric-fog --name Fog --position 0,1,2' | Out-Null
+        SetF '{"size":[6,2,3],"fogDistance":2,"blendDistance":0.3,"albedo":[0.9,0.9,0.9],"enabled":false}'
+        Invoke-Nova 'window game' | Out-Null
+        $glOff = Shot
+        SetF '{"enabled":true}'
+        $glOn = Shot
+        $g = InFog $glOff $glOn; $gu = Above $glOff $glOn
+        Add-Result fogvolume 'OpenGL: the same fog box (cross-compiled shader)' ($g[0] -gt 4 -and $gu[0] -lt 1 -and [math]::Abs($g[0] - $a[0]) / $a[0] -lt 0.25) ("through the box {0:F1} (DX11 {1:F1}), above {2:F2}" -f $g[0], $a[0], $gu[0])
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+}
+
 function Capture-Scenes([switch]$OpenGL, [switch]$Vulkan, [switch]$D3D12, [string]$dir)
 {
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -9375,6 +9518,7 @@ try
                 'scriptable' { Suite-Scriptable }
                 'renderscale' { Suite-RenderScale }
                 'arealight' { Suite-AreaLight }
+                'fogvolume' { Suite-FogVolume }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }

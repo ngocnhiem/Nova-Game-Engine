@@ -11,6 +11,7 @@
 #include "EditorTheme.h"
 #include "UISystem.h"
 #include "ReflectionProbe.h"
+#include "LocalVolumetricFog.h"
 #include "Light2D.h"
 #include "AdaptiveProbeVolume.h"
 #include "DecalProjector.h"
@@ -335,6 +336,8 @@ namespace GameObjectMenu
 		{
 			if (ImGui::MenuItem("Reflection Probe")) { GameObject* o = GameObjectFactory::CreateEmpty("Reflection Probe"); o->AddComponent<ReflectionProbe>(); add(o); }
 			if (ImGui::MenuItem("URP Decal Projector")) { GameObject* o = GameObjectFactory::CreateEmpty("Decal Projector"); o->AddComponent<DecalProjector>(); add(o); }
+			// HDRP 의 GameObject > Rendering > Local Volumetric Fog (늪 · 동굴 · 성 안 안개)
+			if (ImGui::MenuItem("Local Volumetric Fog")) { GameObject* o = GameObjectFactory::CreateEmpty("Local Volumetric Fog"); o->AddComponent<LocalVolumetricFog>(); add(o); }
 			ImGui::EndMenu();
 		}
 

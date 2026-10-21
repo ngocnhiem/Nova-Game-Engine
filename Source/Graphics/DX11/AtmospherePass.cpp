@@ -5,6 +5,9 @@
 #include "Effects.h"
 #include "VolumeProfile.h"
 #include "LightHelper.h"
+#include "LocalVolumetricFog.h"
+#include "LightManager.h"
+#include <chrono>
 
 namespace
 {
@@ -172,6 +175,96 @@ namespace AtmospherePass
 		return p;
 	}
 
+	void GatherLocalFog(Params& p, const XMFLOAT3& eye, bool editorView)
+	{
+		p.LocalFogCount = 0;
+		p.FogLightCount = 0;
+		static const auto s_Start = std::chrono::steady_clock::now();
+		p.Time = std::chrono::duration<float>(std::chrono::steady_clock::now() - s_Start).count();
+		struct Item { LocalVolumetricFog* Fog; XMMATRIX W2L; Vec3 Half, Center; float Distance, Fade; };
+		std::vector<Item> items;
+		const Vec3 cam(eye.x, eye.y, eye.z);
+		for (LocalVolumetricFog* f : LocalVolumetricFog::All())
+		{
+			if (!f || !f->IsEnabled() || !f->IsActiveInHierarchy())
+				continue;
+			Item it;
+			it.Fog = f;
+			f->Placement(it.W2L, it.Half, it.Center);
+			// 카메라에서 상자 표면까지 (안이면 0) — 거리 옅어짐 · 고르기
+			const float radius = it.Half.Length();
+			it.Distance = (std::max)(0.0f, (it.Center - cam).Length() - radius);
+			const float s = f->GetDistanceFadeStart(), e = f->GetDistanceFadeEnd();
+			it.Fade = 1.0f - std::clamp((it.Distance - s) / (std::max)(e - s, 0.01f), 0.0f, 1.0f);
+			if (it.Fade > 0.0f)
+				items.push_back(it);
+		}
+		if (items.empty())
+			return;
+		std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.Distance < b.Distance; });
+		if ((int)items.size() > Params::kMaxLocalFog)
+			items.resize(Params::kMaxLocalFog);
+		// 먼 것부터 섞는다 (가까운 볼륨이 앞을 가린다)
+		std::sort(items.begin(), items.end(), [&](const Item& a, const Item& b) { return (a.Center - cam).LengthSquared() > (b.Center - cam).LengthSquared(); });
+		for (const Item& it : items)
+		{
+			const int i = p.LocalFogCount++;
+			const LocalVolumetricFog* f = it.Fog;
+			const float* a = f->GetAlbedo();
+			p.LocalFogW2L[i] = it.W2L;
+			p.LocalFogAlbedo[i] = XMFLOAT4(ToLinear(a[0]), ToLinear(a[1]), ToLinear(a[2]), 1.0f / (std::max)(f->GetFogDistance(), 0.05f));
+			p.LocalFogHalf[i] = XMFLOAT4(it.Half.x, it.Half.y, it.Half.z, f->GetBlendDistance());
+			p.LocalFogShape[i] = XMFLOAT4(f->GetShape() == LocalVolumetricFog::Shape::Box ? 0.0f : 1.0f, f->GetFalloff() == LocalVolumetricFog::Falloff::Linear ? 0.0f : 1.0f,
+				f->GetAnisotropy(), f->GetAmbientMultiplier());
+			const bool noise = f->GetMask() == LocalVolumetricFog::Mask::Noise;
+			p.LocalFogNoise[i] = XMFLOAT4(1.0f / (std::max)(f->GetNoiseTiling(), 0.05f), noise ? f->GetNoiseStrength() : 0.0f, it.Fade, 0.0f);
+			const Vec3& sc = f->GetScrollSpeed();
+			p.LocalFogScroll[i] = XMFLOAT4(sc.x, sc.y, sc.z, 0.0f);
+		}
+
+		// 안개를 비추는 빛: 어느 볼륨의 둘레 구에 닿는 점광 · 스포트광 · 면광 중 카메라에서 가까운 8 개
+		struct L { XMFLOAT4 Pos, Color, Dir, Cone; float Distance; };
+		std::vector<L> lights;
+		auto touches = [&](const Vec3& pos, float range) {
+			for (const Item& it : items)
+				if ((pos - it.Center).Length() < range + it.Half.Length())
+					return true;
+			return false;
+		};
+		auto add = [&](const Vec3& pos, float range, const Vec3& gammaColor, int type, const Vec3& dir, float spotAngle) {
+			if (range <= 0.0f || !touches(pos, range))
+				return;
+			L l;
+			l.Pos = XMFLOAT4(pos.x, pos.y, pos.z, range);
+			l.Color = XMFLOAT4(ToLinear(gammaColor.x), ToLinear(gammaColor.y), ToLinear(gammaColor.z), type == 1 ? 1.0f : 0.0f);
+			Vec3 d = dir;
+			if (d.LengthSquared() > 1e-8f) d.Normalize();
+			const float half = XMConvertToRadians(std::clamp(spotAngle, 1.0f, 179.0f) * 0.5f);
+			l.Dir = XMFLOAT4(d.x, d.y, d.z, cosf(half));
+			l.Cone = XMFLOAT4(cosf(XMConvertToRadians(std::clamp(spotAngle, 1.0f, 179.0f) * 0.4f)), 0, 0, 0);
+			l.Distance = (pos - cam).Length();
+			lights.push_back(l);
+		};
+		LightManager* lm = LightManager::GetI();
+		for (const PointLight& pl : editorView ? lm->GetEditorPointLights() : lm->GetPointLights())
+			add(Vec3(pl.Position.x, pl.Position.y, pl.Position.z), pl.Range, Vec3(pl.Diffuse.x, pl.Diffuse.y, pl.Diffuse.z), 0, Vec3(0, -1, 0), 0.0f);
+		for (const SpotLight& sl : editorView ? lm->GetEditorSpotLights() : lm->GetSpotLights())
+			add(Vec3(sl.Position.x, sl.Position.y, sl.Position.z), sl.Range, Vec3(sl.Diffuse.x, sl.Diffuse.y, sl.Diffuse.z), 1, Vec3(sl.Direction.x, sl.Direction.y, sl.Direction.z), sl.Spot);
+		for (const AdditionalLight& al : editorView ? lm->GetEditorAdditionalLights() : lm->GetAdditionalLights())
+			add(al.Position, al.Range, al.Color, al.Type == 1 ? 1 : 0, al.Direction, al.SpotAngle);
+		std::sort(lights.begin(), lights.end(), [](const L& a, const L& b) { return a.Distance < b.Distance; });
+		for (const L& l : lights)
+		{
+			if (p.FogLightCount >= Params::kMaxFogLights)
+				break;
+			const int i = p.FogLightCount++;
+			p.FogLightPos[i] = l.Pos;
+			p.FogLightColor[i] = l.Color;
+			p.FogLightDir[i] = l.Dir;
+			p.FogLightCone[i] = l.Cone;
+		}
+	}
+
 	void Bind(FxEffect* fx, const Params& p, const XMFLOAT3& eye, GfxShaderResourceView* sky)
 	{
 		if (!fx)
@@ -186,10 +279,31 @@ namespace AtmospherePass
 		SetVec(fx, "gAtmEye", XMFLOAT4(eye.x, eye.y, eye.z, 1.0f));
 		SetVec(fx, "gAtmFlags", XMFLOAT4(p.Fog ? 1.0f : 0.0f, p.Aerial ? 1.0f : 0.0f, sky ? 1.0f : 0.0f, 0.0f));
 		// 볼륨 안개 (50 번만 — 물은 없다): 해 그림자가 없으면 모두 빛을 받는다 (캐스케이드 수 0)
-		const bool vol = p.VolumetricAlbedo.w > 0.5f && p.Fog;
+		const bool vol = (p.VolumetricAlbedo.w > 0.5f && p.Fog) || p.LocalFogCount > 0;   // 해 그림자: 볼륨 안개 · 지역 안개
 		static uint32_t s_Frame = 0;
 		SetVec(fx, "gAtmVol", XMFLOAT4(p.Volumetric.x, p.Volumetric.y, p.Volumetric.z, (float)(++s_Frame % 64u)));
-		SetVec(fx, "gAtmVolAlbedo", XMFLOAT4(p.VolumetricAlbedo.x, p.VolumetricAlbedo.y, p.VolumetricAlbedo.z, vol ? 1.0f : 0.0f));
+		SetVec(fx, "gAtmVolAlbedo", XMFLOAT4(p.VolumetricAlbedo.x, p.VolumetricAlbedo.y, p.VolumetricAlbedo.z, p.VolumetricAlbedo.w > 0.5f && p.Fog ? 1.0f : 0.0f));
+		// Local Volumetric Fog
+		SetVec(fx, "gLFInfo", XMFLOAT4((float)p.LocalFogCount, p.Time, (float)p.FogLightCount, 24.0f));
+		if (p.LocalFogCount > 0)
+		{
+			if (auto* v = fx->GetVariableByName("gLFWorldToLocal")->AsMatrix(); v && v->IsValid())
+				v->SetMatrixArray(reinterpret_cast<const float*>(p.LocalFogW2L), 0, (uint32_t)p.LocalFogCount);
+			auto arr = [&](const char* name, const XMFLOAT4* data, int n) {
+				if (n <= 0) return;
+				if (auto* v = fx->GetVariableByName(name)->AsVector(); v && v->IsValid())
+					v->SetFloatVectorArray(&data[0].x, 0, (uint32_t)n);
+			};
+			arr("gLFAlbedo", p.LocalFogAlbedo, p.LocalFogCount);
+			arr("gLFHalf", p.LocalFogHalf, p.LocalFogCount);
+			arr("gLFShape", p.LocalFogShape, p.LocalFogCount);
+			arr("gLFNoise", p.LocalFogNoise, p.LocalFogCount);
+			arr("gLFScroll", p.LocalFogScroll, p.LocalFogCount);
+			arr("gLFLightPos", p.FogLightPos, p.FogLightCount);
+			arr("gLFLightColor", p.FogLightColor, p.FogLightCount);
+			arr("gLFLightDir", p.FogLightDir, p.FogLightCount);
+			arr("gLFLightCone", p.FogLightCone, p.FogLightCount);
+		}
 		SetVec(fx, "gAtmShadowInfo", p.SunShadow ? p.ShadowInfo : XMFLOAT4(0, 0, 0, 0));
 		if (vol && p.SunShadow)
 		{

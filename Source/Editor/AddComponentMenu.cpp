@@ -76,6 +76,7 @@ namespace
 		{ "ShadowCaster2D",      "Shadow Caster 2D",      "Rendering",     "scene_light",       true  },
 		{ "DecalProjector",      "Decal Projector",       "Rendering",     "material_ball",     true  },
 		{ "ReflectionProbe",     "Reflection Probe",      "Rendering",     "scene_light",       true  },
+		{ "LocalVolumetricFog",  "Local Volumetric Fog",  "Rendering",     "volume_profile",    true  },
 		{ "AdaptiveProbeVolume", "Adaptive Probe Volume", "Rendering",     "light_point",       true  },
 		{ "LODGroup",            "LOD Group",             "Rendering",     "mesh_renderer",     true  },
 		{ "SpriteAnimator",      "Sprite Animator",       "Miscellaneous", "sprite_animator",   true  },

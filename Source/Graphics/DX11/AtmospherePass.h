@@ -20,10 +20,28 @@ namespace AtmospherePass
 		XMMATRIX SunShadowTransforms[8];
 		XMFLOAT4 CascadeSpheres[8] = {};
 		XMFLOAT4 ShadowInfo = {};   // x 캐스케이드 수, y 세기
-		bool Active() const { return Fog || Aerial; }
+		// Local Volumetric Fog (HDRP): 먼 것부터 (GatherLocalFog)
+		static constexpr int kMaxLocalFog = 16, kMaxFogLights = 8;
+		int LocalFogCount = 0;
+		XMMATRIX LocalFogW2L[kMaxLocalFog];   // 월드 → 단위 공간
+		XMFLOAT4 LocalFogAlbedo[kMaxLocalFog] = {};   // rgb 알베도 (선형), w 소광 (1 / Fog Distance)
+		XMFLOAT4 LocalFogHalf[kMaxLocalFog] = {};     // xyz 월드 반 크기 (m), w Blend Distance
+		XMFLOAT4 LocalFogShape[kMaxLocalFog] = {};    // x 0 상자 · 1 타원체, y 0 Linear · 1 Exponential, z Anisotropy, w Ambient
+		XMFLOAT4 LocalFogNoise[kMaxLocalFog] = {};    // x 1 / Tiling, y Strength (0 = 노이즈 없음), z 거리 옅어짐 (0 ~ 1)
+		XMFLOAT4 LocalFogScroll[kMaxLocalFog] = {};   // xyz m/s
+		// 안개를 비추는 가까운 점광 · 스포트광 (면광은 가운데 점광으로)
+		int FogLightCount = 0;
+		XMFLOAT4 FogLightPos[kMaxFogLights] = {};     // xyz, w 범위
+		XMFLOAT4 FogLightColor[kMaxFogLights] = {};   // rgb (선형), w 0 점광 · 1 스포트광
+		XMFLOAT4 FogLightDir[kMaxFogLights] = {};     // xyz 방향, w cos(바깥)
+		XMFLOAT4 FogLightCone[kMaxFogLights] = {};    // x cos(안)
+		float Time = 0.0f;
+		bool Active() const { return Fog || Aerial || LocalFogCount > 0; }
 	};
 
 	Params FromStack(const VolumeStack& stack, const DirectionalLight* sun);
+	// 씬의 Local Volumetric Fog (켜진 것, 카메라에서 가까운 16 개 — 먼 것부터 그린다) 와 비추는 빛. editorView = Scene 뷰 빛 목록
+	void GatherLocalFog(Params& p, const XMFLOAT3& eye, bool editorView);
 	void Bind(FxEffect* fx, const Params& p, const XMFLOAT3& eye, GfxShaderResourceView* sky);
 	// target 에 그린다. depthSRV = 장면 깊이 (DSV 는 잠시 풀고 끝나면 dsv 로 되돌린다)
 	void Draw(GfxContext* dc, const Params& p, GfxRenderTargetView* target, GfxDepthStencilView* dsv, GfxShaderResourceView* depthSRV,
