@@ -112,7 +112,22 @@ void WheelCollider::FixedUpdate()
 		m_SprungMass = rb->GetMass() / (float)m_WheelCount;
 	}
 
-	const Matrix w = m_pGameObject->GetTransform()->GetWorldMatrix();
+	// 바퀴 틀 = 차체 바디의 마지막 스텝 자세 기준 (PhysX 차량처럼 바디 자세로). 보간하는 차체의 Transform 은 프레임 끝에 한 번만 맞춘다 —
+	//  한 프레임에 스텝이 여럿이면 (느린 프레임 · exec 뒤) Transform 은 첫 스텝 앞의 자세라, 그대로 쓰면 바퀴가 지난 자리에서 땅을 재고
+	//  따라잡는 프레임에 서스펜션이 한꺼번에 움직여 범프 스톱이 수십 배로 튄다 (조향 중이면 차가 두 바퀴로 들려 뒤집혔다)
+	Matrix w = m_pGameObject->GetTransform()->GetWorldMatrix();
+	{
+		Vec3 simPos;
+		Quaternion simRot;
+		if (pm->GetSimulatedPose(rb, simPos, simRot))
+		{
+			Transform* bt = rb->GetGameObject()->GetTransform();
+			Quaternion inv;
+			bt->GetRotation().Inverse(inv);
+			// Transform 자세 → 바디 자세로 옮기는 강체 변환 (크기는 양쪽에 같아 지워진다)
+			w = w * Matrix::CreateTranslation(-bt->GetPosition()) * Matrix::CreateFromQuaternion(inv) * Matrix::CreateFromQuaternion(simRot) * Matrix::CreateTranslation(simPos);
+		}
+	}
 	const Vec3 up = Unit(Vec3::TransformNormal(Vec3(0, 1, 0), w), Vec3(0, 1, 0));
 	const Vec3 top = Vec3::Transform(Center, w);   // 가장 눌린 바퀴 중심
 	const float d = (std::max)(0.0f, SuspensionDistance);
@@ -159,6 +174,10 @@ void WheelCollider::FixedUpdate()
 	if (m_Extension <= 1e-4f && compressVel > 0.0f)
 		load += m_SprungMass * compressVel / dt;   // 끝까지 눌림: 더 내려가지 않게 (범프 스톱)
 	load = (std::max)(0.0f, load);
+	// 타이어 하중 거르기 (PhysX 차량 — Unity WheelCollider 의 바탕 — 의 tire load filter 와 같이 쉬는 하중의 3 배까지):
+	//  범프 스톱 · 착지 때 서스펜션 힘은 순간 수십 배로 튄다. 그 하중을 그대로 마찰에 넣으면 땅 높이에서 옆으로 크게 차서 차가 뒤집힌다
+	//  (서스펜션 힘은 그대로 — 마찰에 쓰는 하중만)
+	const float tireLoad = (std::min)(load, 3.0f * m_SprungMass * g);
 
 	// 타이어 틀: 앞 = 오브젝트 앞을 조향만큼 돌려 바닥 면에, 옆 = 법선 × 앞
 	const Vec3 nrm = Unit(ground->normal, up);
@@ -173,7 +192,7 @@ void WheelCollider::FixedUpdate()
 	// 앞 미끄러짐 → 힘. 한 스텝에 바퀴 속도가 구르는 속도를 넘지 않게 (작은 관성에서도 안정 — 힘 = 바퀴가 줄 수 있는 만큼)
 	const float denom = (std::max)(fabsf(vLong), 1.0f);
 	const float slipLong = (m_Omega * r - vLong) / denom;
-	float fx = (slipLong >= 0.0f ? 1.0f : -1.0f) * ForwardFriction.Evaluate(slipLong) * load;
+	float fx = (slipLong >= 0.0f ? 1.0f : -1.0f) * ForwardFriction.Evaluate(slipLong) * tireLoad;
 	const float rollOmega = vLong / r;
 	float dOmega = -fx * r / inertia * dt;
 	if (BrakeTorque > 0.0f && m_Omega == 0.0f && fabsf(fx) * r <= BrakeTorque)
@@ -193,7 +212,7 @@ void WheelCollider::FixedUpdate()
 	// 옆 미끄러짐 (각) → 옆 힘. 한 스텝에 없앨 옆 속도 = 접점의 실제 질량 (회전 몫 포함) ÷ 바퀴 수의 절반까지 —
 	// 접점은 무게 중심 아래라 옆 힘이 차를 굴린다. 매달린 질량만큼 다 없애면 바퀴 넷이 함께 넘쳐 좌우로 흔들리며 멈추지 않는다
 	const float slipLat = atan2f(vLat, denom);
-	float fy = -(vLat >= 0.0f ? 1.0f : -1.0f) * SidewaysFriction.Evaluate(slipLat) * load;
+	float fy = -(vLat >= 0.0f ? 1.0f : -1.0f) * SidewaysFriction.Evaluate(slipLat) * tireLoad;
 	const float maxFy = 0.5f * pm->GetEffectiveMass(rb, p, side) / (float)m_WheelCount * fabsf(vLat) / dt;
 	fy = std::clamp(fy, -maxFy, maxFy);
 

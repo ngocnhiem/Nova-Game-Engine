@@ -2621,6 +2621,20 @@ Vec3 PhysicsManager::GetWorldCenterOfMass(RigidBody* rb)
 	return rb && rb->GetGameObject() ? rb->GetGameObject()->GetTransform()->GetPosition() : Vec3::Zero;
 }
 
+bool PhysicsManager::GetSimulatedPose(RigidBody* rb, Vec3& position, Quaternion& rotation)
+{
+	CompleteAsync();   // 렌더링과 겹쳐 도는 스텝이 있으면 먼저 끝낸다 (물리 월드를 함께 만지지 않게)
+	if (!m_World) return false;
+	auto* r = m_World->Find(rb);
+	if (!r || !r->dynamic || r->kinematic) return false;
+	Transform* tr = r->owner->GetTransform();
+	if (!NearlyEqual(tr->GetPosition(), r->lastPos) || !NearlyEqual(tr->GetRotation(), r->lastRot))
+		return false;   // 스크립트가 옮겼다 (순간 이동) — Transform 이 맞다
+	position = r->curPos;
+	rotation = r->curRot;
+	return true;
+}
+
 // ====================================================================== Character Controller
 int PhysicsManager::MoveCharacter(CharacterController* cc, const Vec3& motion, float deltaTime)
 {

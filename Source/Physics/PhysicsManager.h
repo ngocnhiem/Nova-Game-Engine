@@ -116,6 +116,10 @@ public:
 	void Sleep(RigidBody* rb);
 	void WakeUp(RigidBody* rb);
 	Vec3 GetWorldCenterOfMass(RigidBody* rb);
+	// 바디의 마지막 스텝 자세 (Unity 의 Rigidbody.position · rotation). 보간하는 바디의 Transform 은 프레임 끝에 한 번만 맞추므로
+	//  한 프레임에 스텝이 여럿이면 Transform 이 늦다 — 스텝마다 쓰는 쪽 (Wheel Collider) 이 이것을 본다.
+	//  다이내믹이 아니거나 스크립트가 마지막 동기화 뒤 Transform 을 옮겼으면 (다음 스텝에 바디로 간다) false
+	bool GetSimulatedPose(RigidBody* rb, Vec3& position, Quaternion& rotation);
 
 	// ---- CharacterController (Jolt CharacterVirtual) ----
 	// motion 만큼 쓸고 지나가며 이동, CollisionFlags 비트 합을 돌려준다. Play 가 아니면 Transform 만 옮긴다
