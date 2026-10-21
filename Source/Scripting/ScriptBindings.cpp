@@ -9,6 +9,7 @@
 #include "TagsAndLayers.h"
 #include "PhysicsSettings.h"
 #include "Debug.h"
+#include "Profiler.h"
 #include "ScriptBindings.h"
 #include "ScriptEngine.h"
 #include "CSharpScript.h"
@@ -328,6 +329,11 @@ namespace
 		//  type = 네이티브 타입 이름, prop: 0 isTrigger 1 center 2 size 3 Sphere radius 4 Capsule radius 5 height 6 direction, 값은 float 4 개
 		void(*COL_Get)(uint64, u8*, int, float*);
 		void(*COL_Set)(uint64, u8*, int, float*);
+
+		// Profiler (C# ProfilerMarker · Profiler.BeginSample · C# Job System 작업자) — 이름은 C# 이 붙잡아 둔 UTF-8
+		int(*Prof_Begin)(const char*, int64_t*, uint16_t*);   // 0 꺼짐, 1 메인 스레드 (중첩 스택), 2 다른 스레드 (시작 시각을 돌려줌)
+		void(*Prof_End)(int, const char*, int64_t, uint16_t);
+		void(*Prof_SetThreadName)(const char*);
 	};
 
 	// ---------------------------------------------------------------- 공용
@@ -1296,6 +1302,28 @@ namespace
 		return 0;
 	}
 	u8* App_ProductName() { return Ret(BuildSettings::ProductName()); }
+
+	// ---------------------------------------------------------------- Profiler
+	int Prof_Begin(const char* name, int64_t* startNs, uint16_t* depth)
+	{
+		if (!Profiler::Collecting())
+			return 0;
+		if (Profiler::IsMainThread())
+		{
+			Profiler::Begin(name);
+			return 1;
+		}
+		Profiler::ThreadSampleBegin(*startNs, *depth);
+		return 2;
+	}
+	void Prof_End(int mode, const char* name, int64_t startNs, uint16_t depth)
+	{
+		if (mode == 1)
+			Profiler::End();
+		else if (mode == 2)
+			Profiler::ThreadSampleEnd(name, startNs, depth);
+	}
+	void Prof_SetThreadName(const char* name) { Profiler::SetThreadName(name); }
 	void App_Quit()
 	{
 		if (Application::IsPlayer())
@@ -1516,6 +1544,9 @@ namespace ScriptBindings
 		};
 		t.COL_Get = COL_Get;
 		t.COL_Set = COL_Set;
+		t.Prof_Begin = Prof_Begin;
+		t.Prof_End = Prof_End;
+		t.Prof_SetThreadName = Prof_SetThreadName;
 		t.PS_Call = PS_Call;
 		t.PS_GetFloat = PS_GetFloat;
 		t.PS_SetFloat = PS_SetFloat;

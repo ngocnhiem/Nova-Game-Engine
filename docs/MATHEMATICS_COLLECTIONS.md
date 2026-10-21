@@ -51,6 +51,7 @@ public class Swarm : MonoBehaviour
 | `NativeList<T>` | `Add` · `AddRange` · `AddNoResize` · `Insert` · `RemoveAt` · `RemoveAtSwapBack` · `RemoveRange` · `Resize` · `Capacity` · `ElementAt` (ref) · `AsArray` (복사 없음) · `ToArray` |
 | `NativeHashMap<K, V>` | 키는 `IEquatable` 비관리 형식 (`int`, `int2`, …). `Add` · `TryAdd` · `TryGetValue` · `ContainsKey` · `Remove` · 색인 · `foreach (var kv in map)` (`kv.Key` · `kv.Value`) · `GetKeyArray` · `GetValueArray` |
 | `NativeHashSet<T>` · `NativeQueue<T>` · `NativeReference<T>` | 집합 · 선입선출 · 값 하나 (잡 결과) |
+| 잡과 함께 ([C# Job System](CSHARP_JOBS.md)) | `Dispose(JobHandle)`, `AsParallelWriter()` (`NativeList` · `NativeQueue` · `NativeHashMap` · `NativeHashSet`) |
 | 확장 | `Sort` · `BinarySearch` · `Contains` · `IndexOf` · `Unique` |
 | `LowLevel.Unsafe` | `UnsafeUtility` (`Malloc` · `Free` · `MemCpy` · `MemClear` · `SizeOf` · `AlignOf` …), `GetUnsafePtr()`, `AtomicSafetyHandle` |
 
@@ -69,6 +70,7 @@ Unity 의 `ENABLE_UNITY_COLLECTIONS_CHECKS` 와 같다 — 에디터에서 켜�
 - 범위 밖 색인 → `IndexOutOfRangeException`
 - Dispose 뒤 사용 — **복사본으로도** (값 형식이라 복사해도 같은 메모리), 두 번 Dispose, 지난 프레임의 Temp → `ObjectDisposedException` (컨테이너마다 버전 칸 하나, Dispose 하면 버전이 올라 모든 복사본이 맞지 않게 된다)
 - `AsReadOnly` · `[ReadOnly]` 에 쓰기, 하위 배열 · `Reinterpret` · `AsArray` 를 Dispose → `InvalidOperationException`
+- 예약된 잡이 쓰는 동안 메인 스레드 접근 · Dispose → `InvalidOperationException` (`JobHandle.Complete()` 먼저 — [C# Job System](CSHARP_JOBS.md))
 - 누수 (`NativeLeakDetection.Mode` — 에디터 기본 Enabled): **Play 가 끝날 때** 남은 TempJob · Persistent 를 Console 오류로 알리고 (`A Native Collection has not been disposed …`, 컨테이너 이름 · 바이트) 풀어 준다 — 그 뒤 옛 복사본은 `ObjectDisposedException` (매달린 포인터 없음). `EnabledWithStackTrace` 면 할당한 곳의 호출 스택. 스크립트를 다시 읽을 때도 같다
 
 ### 엔진 안
@@ -83,5 +85,5 @@ Unity 의 `ENABLE_UNITY_COLLECTIONS_CHECKS` 와 같다 — 에디터에서 켜�
 ## 아직
 
 - 지금은 성분마다 스칼라 코드. **게임 스크립트가 Debug 로 빌드된다** — 위 벤치마크 (4 백만 덧셈) 는 `Vector3[]` 117 ms · `NativeArray<float3>` 165 ms · Span 129 ms 로 아직 느리다. B-3 (`[BurstCompile]` 1 단계) 에서 Release 빌드 · `AggressiveOptimization` · HPC# 분석기, B-4 에서 네이티브 SIMD
-- `FixedString32Bytes` 같은 고정 문자열, `NativeParallelHashMap` · `ParallelWriter` (B-2 Job System 과 함께), `NativeBitArray` · `NativeStream`
+- `FixedString32Bytes` 같은 고정 문자열, `NativeParallelMultiHashMap`, `NativeBitArray` · `NativeStream`
 - `AsArray` 로 얻은 배열은 목록이 커진 뒤 (버퍼가 옮겨짐) 검사 없이 무효 (Unity 는 따로 잡는다)

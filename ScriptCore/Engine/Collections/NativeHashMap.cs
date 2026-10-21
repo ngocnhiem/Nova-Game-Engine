@@ -3,7 +3,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using NovaEngine.Collections.LowLevel.Unsafe;
+using NovaEngine.Jobs;
 
 namespace NovaEngine.Collections
 {
@@ -33,6 +35,20 @@ namespace NovaEngine.Collections
         public int BucketMask;     // 버킷 수 - 1 (2 의 거듭제곱)
         public int AllocatedIndex; // 한 번도 안 쓴 칸의 시작
         public int FreeList;       // 지운 칸 사슬 (-1 = 없음)
+        public int Lock;           // ParallelWriter 의 회전 잠금
+    }
+
+    internal static unsafe class SpinLockPtr
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Enter(int* l)
+        {
+            if (Interlocked.CompareExchange(ref *l, 1, 0) == 0) return;
+            var spin = new SpinWait();
+            while (Interlocked.CompareExchange(ref *l, 1, 0) != 0) spin.SpinOnce(-1);
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Exit(int* l) => Volatile.Write(ref *l, 0);
     }
 
     internal static unsafe class HashMapCore<TKey, TValue> where TKey : unmanaged, IEquatable<TKey> where TValue : unmanaged
@@ -52,7 +68,7 @@ namespace NovaEngine.Collections
             d->Buckets = (int*)(block + keys + values + next);
             d->Capacity = capacity;
             d->BucketMask = buckets - 1;
-            Clear(d);
+            Clear(d);   // Lock 은 그대로 (ParallelWriter 가 잠근 채 늘린다)
         }
 
         static int math_ceilpow2(int x) { x -= 1; x |= x >> 1; x |= x >> 2; x |= x >> 4; x |= x >> 8; x |= x >> 16; return x + 1; }
@@ -181,6 +197,7 @@ namespace NovaEngine.Collections
     /// 비관리 해시 맵 (Unity.Collections.NativeHashMap). 키는 IEquatable 을 구현하는 비관리 형식 (int, int2, FixedString ...).
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
+    [NativeContainer]
     public unsafe struct NativeHashMap<TKey, TValue> : IDisposable, IEnumerable<KVPair<TKey, TValue>>
         where TKey : unmanaged, IEquatable<TKey> where TValue : unmanaged
     {
@@ -193,6 +210,7 @@ namespace NovaEngine.Collections
             CollectionHelper.CheckAllocator(allocator);
             if (initialCapacity < 0) throw new ArgumentOutOfRangeException(nameof(initialCapacity));
             m_Data = (HashMapData*)UnsafeUtility.Malloc(sizeof(HashMapData), 16, allocator);
+            m_Data->Lock = 0;
             m_AllocatorLabel = allocator;
             HashMapCore<TKey, TValue>.Allocate(m_Data, initialCapacity, allocator);
             m_Safety = CollectionHelper.CreateSafety(m_Data, allocator, "NativeHashMap<" + typeof(TKey).Name + "," + typeof(TValue).Name + ">");
@@ -296,6 +314,40 @@ namespace NovaEngine.Collections
             m_Data = null;
         }
 
+        /// <summary>의존성 (앞 잡) 이 끝난 뒤 작업 스레드에서 푼다</summary>
+        public JobHandle Dispose(JobHandle inputDeps)
+        {
+            if (CollectionChecks.Enabled && !AtomicSafetyHandle.IsDefaultValue(m_Safety)) AtomicSafetyHandle.CheckExistsAndThrow(m_Safety);
+            if (m_Data == null) return inputDeps;
+            JobHandle h = new DisposeJob<NativeHashMap<TKey, TValue>> { Container = this }.Schedule(inputDeps);
+            m_Data = null;
+            return h;
+        }
+
+        /// <summary>여러 잡이 함께 넣기 (잠금 — 넣기만 한다)</summary>
+        public readonly ParallelWriter AsParallelWriter() { CheckWrite(); return new ParallelWriter { m_Data = m_Data, m_AllocatorLabel = m_AllocatorLabel, m_Safety = m_Safety }; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        [NativeContainer, NativeContainerIsAtomicWriteOnly]
+        public unsafe struct ParallelWriter
+        {
+            internal HashMapData* m_Data;
+            internal Allocator m_AllocatorLabel;
+            internal AtomicSafetyHandle m_Safety;
+            public bool TryAdd(TKey key, TValue item)
+            {
+                if (CollectionChecks.Enabled) AtomicSafetyHandle.CheckWriteAndThrow(m_Safety);
+                SpinLockPtr.Enter(&m_Data->Lock);
+                try
+                {
+                    int slot = HashMapCore<TKey, TValue>.Add(m_Data, key, m_AllocatorLabel, out bool added);
+                    if (added) ((TValue*)m_Data->Values)[slot] = item;
+                    return added;
+                }
+                finally { SpinLockPtr.Exit(&m_Data->Lock); }
+            }
+        }
+
         public readonly Enumerator GetEnumerator() { CheckRead(); return new Enumerator(this); }
         readonly IEnumerator<KVPair<TKey, TValue>> IEnumerable<KVPair<TKey, TValue>>.GetEnumerator() => GetEnumerator();
         readonly IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
@@ -317,6 +369,7 @@ namespace NovaEngine.Collections
 
     /// <summary>비관리 집합 (Unity.Collections.NativeHashSet)</summary>
     [StructLayout(LayoutKind.Sequential)]
+    [NativeContainer]
     public unsafe struct NativeHashSet<T> : IDisposable, IEnumerable<T> where T : unmanaged, IEquatable<T>
     {
         internal HashMapData* m_Data;
@@ -328,6 +381,7 @@ namespace NovaEngine.Collections
             CollectionHelper.CheckAllocator(allocator);
             if (initialCapacity < 0) throw new ArgumentOutOfRangeException(nameof(initialCapacity));
             m_Data = (HashMapData*)UnsafeUtility.Malloc(sizeof(HashMapData), 16, allocator);
+            m_Data->Lock = 0;
             m_AllocatorLabel = allocator;
             HashMapCore<T, byte>.Allocate(m_Data, initialCapacity, allocator);
             m_Safety = CollectionHelper.CreateSafety(m_Data, allocator, "NativeHashSet<" + typeof(T).Name + ">");
@@ -385,6 +439,34 @@ namespace NovaEngine.Collections
             m_Data = null;
         }
 
+        /// <summary>의존성 (앞 잡) 이 끝난 뒤 작업 스레드에서 푼다</summary>
+        public JobHandle Dispose(JobHandle inputDeps)
+        {
+            if (CollectionChecks.Enabled && !AtomicSafetyHandle.IsDefaultValue(m_Safety)) AtomicSafetyHandle.CheckExistsAndThrow(m_Safety);
+            if (m_Data == null) return inputDeps;
+            JobHandle h = new DisposeJob<NativeHashSet<T>> { Container = this }.Schedule(inputDeps);
+            m_Data = null;
+            return h;
+        }
+
+        public readonly ParallelWriter AsParallelWriter() { CheckWrite(); return new ParallelWriter { m_Data = m_Data, m_AllocatorLabel = m_AllocatorLabel, m_Safety = m_Safety }; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        [NativeContainer, NativeContainerIsAtomicWriteOnly]
+        public unsafe struct ParallelWriter
+        {
+            internal HashMapData* m_Data;
+            internal Allocator m_AllocatorLabel;
+            internal AtomicSafetyHandle m_Safety;
+            public bool Add(T item)
+            {
+                if (CollectionChecks.Enabled) AtomicSafetyHandle.CheckWriteAndThrow(m_Safety);
+                SpinLockPtr.Enter(&m_Data->Lock);
+                try { HashMapCore<T, byte>.Add(m_Data, item, m_AllocatorLabel, out bool added); return added; }
+                finally { SpinLockPtr.Exit(&m_Data->Lock); }
+            }
+        }
+
         public readonly Enumerator GetEnumerator() { CheckRead(); return new Enumerator(this); }
         readonly IEnumerator<T> IEnumerable<T>.GetEnumerator() => GetEnumerator();
         readonly IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
@@ -410,10 +492,12 @@ namespace NovaEngine.Collections
         public int Head;
         public int Count;
         public int Capacity;
+        public int Lock;   // ParallelWriter
     }
 
     /// <summary>비관리 선입선출 큐 (Unity.Collections.NativeQueue)</summary>
     [StructLayout(LayoutKind.Sequential)]
+    [NativeContainer]
     public unsafe struct NativeQueue<T> : IDisposable where T : unmanaged
     {
         internal QueueData* m_Data;
@@ -424,7 +508,7 @@ namespace NovaEngine.Collections
         {
             CollectionHelper.CheckAllocator(allocator);
             m_Data = (QueueData*)UnsafeUtility.Malloc(sizeof(QueueData), 16, allocator);
-            m_Data->Ptr = null; m_Data->Head = 0; m_Data->Count = 0; m_Data->Capacity = 0;
+            m_Data->Ptr = null; m_Data->Head = 0; m_Data->Count = 0; m_Data->Capacity = 0; m_Data->Lock = 0;
             m_AllocatorLabel = allocator;
             m_Safety = CollectionHelper.CreateSafety(m_Data, allocator, "NativeQueue<" + typeof(T).Name + ">");
         }
@@ -451,13 +535,16 @@ namespace NovaEngine.Collections
         public void Enqueue(T value)
         {
             CheckWrite();
-            QueueData* d = m_Data;
+            EnqueueCore(m_Data, value, m_AllocatorLabel);
+        }
+        internal static void EnqueueCore(QueueData* d, T value, Allocator allocator)
+        {
             if (d->Count == d->Capacity)
             {
                 int cap = Math.Max(d->Capacity * 2, Math.Max(64 / sizeof(T), 4));
-                T* p = (T*)UnsafeUtility.Malloc((long)cap * sizeof(T), UnsafeUtility.AlignOf<T>(), m_AllocatorLabel);
+                T* p = (T*)UnsafeUtility.Malloc((long)cap * sizeof(T), UnsafeUtility.AlignOf<T>(), allocator);
                 for (int i = 0; i < d->Count; i++) p[i] = ((T*)d->Ptr)[(d->Head + i) % d->Capacity];
-                if (d->Ptr != null) UnsafeUtility.Free(d->Ptr, m_AllocatorLabel);
+                if (d->Ptr != null) UnsafeUtility.Free(d->Ptr, allocator);
                 d->Ptr = p; d->Head = 0; d->Capacity = cap;
             }
             ((T*)d->Ptr)[(d->Head + d->Count) % d->Capacity] = value;
@@ -506,6 +593,35 @@ namespace NovaEngine.Collections
             if (m_Data->Ptr != null) UnsafeUtility.Free(m_Data->Ptr, m_AllocatorLabel);
             UnsafeUtility.Free(m_Data, m_AllocatorLabel);
             m_Data = null;
+        }
+
+        /// <summary>의존성 (앞 잡) 이 끝난 뒤 작업 스레드에서 푼다</summary>
+        public JobHandle Dispose(JobHandle inputDeps)
+        {
+            if (CollectionChecks.Enabled && !AtomicSafetyHandle.IsDefaultValue(m_Safety)) AtomicSafetyHandle.CheckExistsAndThrow(m_Safety);
+            if (m_Data == null) return inputDeps;
+            JobHandle h = new DisposeJob<NativeQueue<T>> { Container = this }.Schedule(inputDeps);
+            m_Data = null;
+            return h;
+        }
+
+        /// <summary>여러 잡이 함께 넣기 (잠금)</summary>
+        public readonly ParallelWriter AsParallelWriter() { CheckWrite(); return new ParallelWriter { m_Data = m_Data, m_AllocatorLabel = m_AllocatorLabel, m_Safety = m_Safety }; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        [NativeContainer, NativeContainerIsAtomicWriteOnly]
+        public unsafe struct ParallelWriter
+        {
+            internal QueueData* m_Data;
+            internal Allocator m_AllocatorLabel;
+            internal AtomicSafetyHandle m_Safety;
+            public void Enqueue(T value)
+            {
+                if (CollectionChecks.Enabled) AtomicSafetyHandle.CheckWriteAndThrow(m_Safety);
+                SpinLockPtr.Enter(&m_Data->Lock);
+                try { EnqueueCore(m_Data, value, m_AllocatorLabel); }
+                finally { SpinLockPtr.Exit(&m_Data->Lock); }
+            }
         }
     }
 

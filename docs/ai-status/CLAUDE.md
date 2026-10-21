@@ -1,13 +1,21 @@
 # NOVA Claude 작업 상태
 
-- 갱신 시각: 2026년 10월 21일 — **C# 고성능 경로 B-1: Mathematics · Collections** (사용자 지시: "유니티 Burst 처럼 겁나 빠른 처리" → 로드맵 B-1 → B-2 → B-3 → B-5 → B-4 를 "순서대로 진행")
+- 갱신 시각: 2026년 10월 21일 — **C# 고성능 경로 B-2: C# Job System** (같은 지시, 순서대로)
+  - `ScriptCore/Engine/Jobs/` (NovaEngine.Jobs): `Jobs.cs` (IJob · IJobFor · IJobParallelFor · IJobParallelForBatch, JobHandle, 예약 확장 · Run, DisposeJob, JobsUtility), `JobScheduler.cs` (C# 전용 작업 스레드 코어 - 1 — 엔진 Job System 은 파이버라 CLR 불가, 기록 풀 · 표 · 의존성 · 컨테이너 잠금 · 충돌 검사 · Complete 돕기 · CompleteAll · 예외 → Console), `JobReflection.cs` (잡 형식마다 컨테이너 필드의 m_Safety 위치를 표시 값으로 찾기, 묶음 범위 좁히기, DeallocateOnJobCompletion)
+  - Collections: AtomicSafetyHandle 비트 (kNoWrite · kNoRead · kJob, 노드 JobLocks · Temp 표시), NativeContainer 특성 5 종, 모든 컨테이너 `Dispose(JobHandle)`, ParallelWriter (NativeList · NativeQueue · NativeHashMap · NativeHashSet — 회전 잠금)
+  - Profiling: `ScriptCore/Engine/Profiling.cs` (ProfilerMarker · Profiler.BeginSample) + 네이티브 `Prof_Begin/End/SetThreadName` (`ScriptBindings.cpp`, NativeApi 표 끝에 3 개)
+  - Bridge: BeginFrame 에 잡 예외 출력, EngineEvent(0) · 다시 읽기 전에 `JobScheduler.CompleteAll`
+  - 문서 `docs/CSHARP_JOBS.md`, MATHEMATICS_COLLECTIONS · 로드맵 갱신
+  - 검사: csjobs 6/6 (보이드 20 만 × 8: Run 118 ms → Schedule 12.6 ms, 9.4 배), mathcollections 7/7
+  - 다음: B-3 `[BurstCompile]` 1 단계 (게임 스크립트 Release 빌드 설정, AggressiveOptimization, HPC# 분석기)
+  - 다른 담당자: ScriptCore (Interop/Bridge · NativeApi, Engine/Collections · 새 Jobs · Profiling.cs), Source/Scripting/ScriptBindings.cpp, Tools/tests/run_tests.ps1
+- 이전: 2026년 10월 21일 — **C# 고성능 경로 B-1: Mathematics · Collections** (사용자 지시: "유니티 Burst 처럼 겁나 빠른 처리" → 로드맵 B-1 → B-2 → B-3 → B-5 → B-4 를 "순서대로 진행")
   - `ScriptCore/Engine/Mathematics/` (NovaEngine.Mathematics — Unity.Mathematics 이름 · 규칙): `Vectors.gen.cs` · `Math.gen.cs` 는 `Tools/gen_mathematics.py` 가 만든다 (float/int/uint/bool 2·3·4, 스위즐, 연산자, Vector · Quaternion 암묵 변환, math 성분 함수), 손으로 `Quaternion.cs` (quaternion · RotationOrder — Euler 라디안 ZXY) · `Matrix.cs` (float2x2 · 3x3 · 4x4 열 우선, mul · inverse · TRS) · `Random.cs`
   - `ScriptCore/Engine/Collections/` (NovaEngine.Collections): Allocator · 특성 (ReadOnly · WriteOnly · NativeDisableParallelForRestriction · DeallocateOnJobCompletion — B-2 가 쓴다) · NativeLeakDetection · `CollectionChecks` (에디터 켬, 환경 변수 NOVA_COLLECTIONS_CHECKS), `Unsafe.cs` (UnsafeUtility, AtomicSafetyHandle — 비관리 노드 풀 · 버전, Temp 스레드 덩어리 메모리 (프레임 시작에 되돌림), TempJob · Persistent 할당 기록), NativeArray · NativeList · NativeReference · NativeHashMap · NativeHashSet · NativeQueue · 정렬 확장
   - 엔진 시점: `Bridge.BeginFrame` (Temp · TempJob 나이), 새 진입점 `Bridge.EngineEvent(0)` (`ScriptEngine::OnPlayModeChanged(false)` 가 부름 — 누수 알림 · 풀기), `UnloadInternal`, exec 끝 (`App_Info(1)` = Play 중 — `ScriptBindings.cpp`)
   - 문서 `docs/MATHEMATICS_COLLECTIONS.md`, 로드맵 B-1 완료 표시 · B-3 에 "게임 스크립트 Release 빌드" 추가
   - 검사: mathcollections 7/7 (한 번에)
   - 발견: 게임 스크립트 (Assembly-CSharp) · nova exec 가 `-c Debug` 로 빌드된다 (`ScriptEngine.cpp` 432 · 1082) — JIT 최적화 꺼짐, 플레이어 빌드도 그 DLL. 4 백만 덧셈 Vector3[] 117 ms · NativeArray 165 ms. B-3 에서 Code Optimization 설정 (Release 기본) 으로
-  - 다음: B-2 C# Job System (IJob · IJobFor · IJobParallelFor · JobHandle, 작업 스레드, [ReadOnly] · 동시 쓰기 검사, ParallelWriter)
   - 다른 담당자: ScriptCore (Interop/Bridge · NativeApi, 새 폴더 Engine/Mathematics · Collections), Source/Scripting (ScriptEngine · ScriptBindings), Tools/tests/run_tests.ps1, 새 Tools/gen_mathematics.py
 - 이전: 2026년 10월 21일 — **애니메이션 레이어 · 이벤트 · IK · Timeline · ScriptableObject · Render Scale · 면광 · Fog Volume · SSGI** (사용자 지시: "Avatar Mask 가 없어 걸으며 상체만 휘두르기가 안 된다, 애니메이션 이벤트 · 손 IK · 시네마틱 (Timeline) 도 없다 — 먼저 진행. ScriptableObject, 큰 월드 동적 GI · Fog Volume · 면광 · Render Scale / FSR 도 진행")
   - 커밋 9138a4e: Avatar Mask (`.mask`, Unity 13 부위 + 본 목록, Hips → Root), 레이어 Override · Additive · `SetLayerWeight`, AnimationEvent (`<모델>.animevents`, CLI `animevent`, `ScriptEngine::InvokeAnimationEvent`)

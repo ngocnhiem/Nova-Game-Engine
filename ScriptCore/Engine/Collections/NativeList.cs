@@ -3,7 +3,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using NovaEngine.Collections.LowLevel.Unsafe;
+using NovaEngine.Jobs;
 
 namespace NovaEngine.Collections
 {
@@ -21,6 +23,7 @@ namespace NovaEngine.Collections
     /// AsArray() 로 얻은 NativeArray 는 목록이 커지면 (Add · Capacity) 버퍼가 옮겨져 쓸 수 없다.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
+    [NativeContainer]
     public unsafe struct NativeList<T> : IDisposable, IEnumerable<T> where T : unmanaged
     {
         internal ListData* m_Data;
@@ -269,6 +272,54 @@ namespace NovaEngine.Collections
             m_Data = null;
         }
 
+        /// <summary>의존성 (앞 잡) 이 끝난 뒤 작업 스레드에서 푼다</summary>
+        public JobHandle Dispose(JobHandle inputDeps)
+        {
+            if (CollectionChecks.Enabled && !AtomicSafetyHandle.IsDefaultValue(m_Safety)) AtomicSafetyHandle.CheckExistsAndThrow(m_Safety);
+            if (m_Data == null) return inputDeps;
+            JobHandle h = new DisposeJob<NativeList<T>> { Container = this }.Schedule(inputDeps);
+            m_Data = null;
+            return h;
+        }
+
+        /// <summary>여러 잡이 함께 덧붙이기 (IJobParallelFor 안에서 — 미리 Capacity 를 넉넉히)</summary>
+        public readonly ParallelWriter AsParallelWriter() { CheckWrite(); return new ParallelWriter { m_ListData = m_Data, m_Safety = m_Safety }; }
+
+        /// <summary>NativeList 의 동시 쓰기 (Unity.Collections.NativeList&lt;T&gt;.ParallelWriter) — 늘리지 않는다</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        [NativeContainer, NativeContainerIsAtomicWriteOnly]
+        public unsafe struct ParallelWriter
+        {
+            internal ListData* m_ListData;
+            internal AtomicSafetyHandle m_Safety;
+
+            public readonly void* Ptr => m_ListData->Ptr;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void AddNoResize(T value)
+            {
+                if (CollectionChecks.Enabled) AtomicSafetyHandle.CheckWriteAndThrow(m_Safety);
+                int index = Interlocked.Increment(ref m_ListData->Length) - 1;
+                if (index >= m_ListData->Capacity)
+                {
+                    Interlocked.Decrement(ref m_ListData->Length);
+                    throw new InvalidOperationException("ParallelWriter.AddNoResize: Length would exceed Capacity " + m_ListData->Capacity + " (set Capacity before scheduling)");
+                }
+                ((T*)m_ListData->Ptr)[index] = value;
+            }
+            public void AddRangeNoResize(void* ptr, int count)
+            {
+                if (CollectionChecks.Enabled) AtomicSafetyHandle.CheckWriteAndThrow(m_Safety);
+                int index = Interlocked.Add(ref m_ListData->Length, count) - count;
+                if (index + count > m_ListData->Capacity)
+                {
+                    Interlocked.Add(ref m_ListData->Length, -count);
+                    throw new InvalidOperationException("ParallelWriter.AddRangeNoResize: Length would exceed Capacity " + m_ListData->Capacity);
+                }
+                UnsafeUtility.MemCpy((T*)m_ListData->Ptr + index, ptr, (long)count * sizeof(T));
+            }
+            public void AddRangeNoResize(NativeList<T> list) => AddRangeNoResize(list.m_Data->Ptr, list.m_Data->Length);
+        }
+
         public readonly NativeArray<T>.Enumerator GetEnumerator() => AsArray().GetEnumerator();
         readonly IEnumerator<T> IEnumerable<T>.GetEnumerator() => GetEnumerator();
         readonly IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
@@ -279,6 +330,7 @@ namespace NovaEngine.Collections
     /// 정수 · 열거형 같은 비관리 값 하나 (Unity.Collections.NativeReference) — 잡의 결과를 돌려받을 때.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
+    [NativeContainer]
     public unsafe struct NativeReference<T> : IDisposable, IEquatable<NativeReference<T>> where T : unmanaged
     {
         internal void* m_Data;
@@ -314,6 +366,16 @@ namespace NovaEngine.Collections
             }
             UnsafeUtility.Free(m_Data, m_AllocatorLabel);
             m_Data = null;
+        }
+
+        /// <summary>의존성 (앞 잡) 이 끝난 뒤 작업 스레드에서 푼다</summary>
+        public JobHandle Dispose(JobHandle inputDeps)
+        {
+            if (CollectionChecks.Enabled && !AtomicSafetyHandle.IsDefaultValue(m_Safety)) AtomicSafetyHandle.CheckExistsAndThrow(m_Safety);
+            if (m_Data == null) return inputDeps;
+            JobHandle h = new DisposeJob<NativeReference<T>> { Container = this }.Schedule(inputDeps);
+            m_Data = null;
+            return h;
         }
         public readonly bool Equals(NativeReference<T> other) => m_Data == other.m_Data;
         public override readonly bool Equals(object obj) => obj is NativeReference<T> r && Equals(r);

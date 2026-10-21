@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using NovaEngine.Collections.LowLevel.Unsafe;
+using NovaEngine.Jobs;
 
 namespace NovaEngine.Collections
 {
@@ -13,6 +14,7 @@ namespace NovaEngine.Collections
     /// 에디터에서는 범위 밖 색인 · Dispose 뒤 사용을 예외로 잡는다 (플레이어 빌드는 검사 없이 포인터 그대로).
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
+    [NativeContainer, NativeContainerSupportsMinMaxWriteRestriction, NativeContainerSupportsDeallocateOnJobCompletion]
     public unsafe struct NativeArray<T> : IDisposable, IEnumerable<T>, IEquatable<NativeArray<T>> where T : unmanaged
     {
         internal void* m_Buffer;
@@ -131,6 +133,19 @@ namespace NovaEngine.Collections
             UnsafeUtility.Free(m_Buffer, m_AllocatorLabel);
             m_Buffer = null;
             m_Length = 0;
+        }
+
+        /// <summary>의존성 (앞 잡) 이 끝난 뒤 작업 스레드에서 푼다 — 돌려준 핸들을 다음 일의 의존성으로</summary>
+        public JobHandle Dispose(JobHandle inputDeps)
+        {
+            if (CollectionChecks.Enabled && !AtomicSafetyHandle.IsDefaultValue(m_Safety)) AtomicSafetyHandle.CheckExistsAndThrow(m_Safety);
+            if (m_Buffer == null) return inputDeps;
+            if (m_AllocatorLabel <= Allocator.None)
+                throw new InvalidOperationException("The NativeArray can not be Disposed because it was not allocated with a valid allocator (a sub array, Reinterpret or AsArray view does not own its memory).");
+            JobHandle h = new DisposeJob<NativeArray<T>> { Container = this }.Schedule(inputDeps);
+            m_Buffer = null;
+            m_Length = 0;
+            return h;
         }
 
         public void CopyFrom(T[] array) { CheckWrite(); Copy(array, this); }
@@ -266,6 +281,7 @@ namespace NovaEngine.Collections
 
         /// <summary>읽기만 되는 NativeArray (Unity.Collections.NativeArray&lt;T&gt;.ReadOnly)</summary>
         [StructLayout(LayoutKind.Sequential)]
+        [NativeContainer, NativeContainerIsReadOnly]
         public readonly struct ReadOnly : IEnumerable<T>
         {
             internal readonly void* m_Buffer;

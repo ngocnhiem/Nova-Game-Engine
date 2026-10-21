@@ -107,16 +107,16 @@ namespace NovaEngine.Collections.LowLevel.Unsafe
     [StructLayout(LayoutKind.Sequential)]
     internal struct SafetyNode
     {
-        public int Version;      // kStep 씩 오른다 (아래 두 비트는 핸들 쪽 권한 표시)
-        public int Flags;
-        public long WriterJob;   // C# Job System (B-2): 이 컨테이너에 쓰는 잡
-        public long ReaderJobs;  //                      읽는 잡들 (묶음)
-        public long Reserved;
+        public int Version;      // kStep 씩 오른다 (아래 세 비트는 핸들 쪽 표시 — 권한 · 잡 사본)
+        public int Flags;        // kFlagTemp
+        public int JobLocks;     // 이 컨테이너를 쓰는 예약된 잡: 읽기 잡 수 + 쓰기 잡 × kWriteLock (JobHandle.Complete 까지)
+        public int Reserved0;
+        public long Reserved1, Reserved2;
     }
 
     /// <summary>
-    /// 컨테이너 안전 핸들 (Unity.Collections.LowLevel.Unsafe.AtomicSafetyHandle) — Dispose 뒤 사용 · 읽기 전용에 쓰기를 잡는다.
-    /// 안전 검사가 꺼지면 (플레이어) 만들지 않고 검사도 하지 않는다.
+    /// 컨테이너 안전 핸들 (Unity.Collections.LowLevel.Unsafe.AtomicSafetyHandle) — Dispose 뒤 사용 · 읽기 전용에 쓰기 ·
+    /// 예약된 잡이 쓰는 동안 메인 스레드 접근을 잡는다. 안전 검사가 꺼지면 (플레이어) 만들지 않고 검사도 하지 않는다.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public unsafe struct AtomicSafetyHandle
@@ -124,7 +124,9 @@ namespace NovaEngine.Collections.LowLevel.Unsafe
         internal SafetyNode* node;
         internal int version;
 
-        internal const int kNoWrite = 1, kNoRead = 2, kPermissionMask = 3, kStep = 4;
+        // 핸들 쪽 표시: 읽기 전용 · 쓰기 전용 · 잡 안의 사본 (잡 잠금을 건너뛴다)
+        internal const int kNoWrite = 1, kNoRead = 2, kJob = 4, kPermissionMask = 7, kStep = 8;
+        internal const int kWriteLock = 1 << 16, kFlagTemp = 1;
 
         public static AtomicSafetyHandle Create() => SafetyPool.Create();
         public static void Release(AtomicSafetyHandle handle) => SafetyPool.Release(handle);
@@ -135,24 +137,29 @@ namespace NovaEngine.Collections.LowLevel.Unsafe
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void CheckReadAndThrow(in AtomicSafetyHandle handle)
         {
-            if (handle.node != null && (handle.version & ~kNoWrite) != handle.node->Version) ThrowRead(handle);
+            SafetyNode* n = handle.node;
+            if (n != null && ((handle.version & ~(kNoWrite | kJob)) != n->Version || ((handle.version & kJob) == 0 && n->JobLocks >= kWriteLock))) ThrowRead(handle);
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void CheckWriteAndThrow(in AtomicSafetyHandle handle)
         {
-            if (handle.node != null && handle.version != handle.node->Version) ThrowWrite(handle);
+            SafetyNode* n = handle.node;
+            if (n != null && ((handle.version & ~(kNoRead | kJob)) != n->Version || ((handle.version & kJob) == 0 && n->JobLocks != 0))) ThrowWrite(handle);
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void CheckExistsAndThrow(in AtomicSafetyHandle handle)
         {
             if (handle.node != null && (handle.version & ~kPermissionMask) != handle.node->Version) ThrowDisposed();
         }
-        /// <summary>Dispose 할 수 있는지 (살아 있고 읽기 전용 복사본이 아님)</summary>
+        /// <summary>Dispose 할 수 있는지 (살아 있고, 읽기 전용 복사본이 아니고, 예약된 잡이 쓰고 있지 않다)</summary>
         public static void CheckDeallocateAndThrow(in AtomicSafetyHandle handle)
         {
-            if (handle.node == null) return;
-            if ((handle.version & ~kPermissionMask) != handle.node->Version) ThrowDisposed();
+            SafetyNode* n = handle.node;
+            if (n == null) return;
+            if ((handle.version & ~kPermissionMask) != n->Version) ThrowDisposed();
             if ((handle.version & kNoWrite) != 0) throw new InvalidOperationException("The native container can not be disposed because it is read-only (AsReadOnly or [ReadOnly] in a job).");
+            if ((handle.version & kJob) == 0 && n->JobLocks != 0)
+                throw new InvalidOperationException(NovaEngine.Jobs.JobScheduler.DescribeLock((IntPtr)n, "dispose") + " Use Dispose(JobHandle) to dispose it after the job.");
         }
         /// <summary>읽기만 되는 복사본</summary>
         public static AtomicSafetyHandle AsReadOnly(in AtomicSafetyHandle handle) => new AtomicSafetyHandle { node = handle.node, version = handle.version | kNoWrite };
@@ -163,17 +170,30 @@ namespace NovaEngine.Collections.LowLevel.Unsafe
         static void ThrowRead(in AtomicSafetyHandle handle)
         {
             if ((handle.version & ~kPermissionMask) != handle.node->Version) ThrowDisposed();
-            throw new InvalidOperationException("The native container is write-only ([WriteOnly]); it can not be read.");
+            if ((handle.version & kNoRead) != 0) throw new InvalidOperationException("The native container is write-only ([WriteOnly]); it can not be read.");
+            throw new InvalidOperationException(NovaEngine.Jobs.JobScheduler.DescribeLock((IntPtr)handle.node, "read from"));
         }
         [MethodImpl(MethodImplOptions.NoInlining)]
         static void ThrowWrite(in AtomicSafetyHandle handle)
         {
             if ((handle.version & ~kPermissionMask) != handle.node->Version) ThrowDisposed();
-            throw new InvalidOperationException("The native container is read-only (AsReadOnly or [ReadOnly] in a job); it can not be written.");
+            if ((handle.version & kNoWrite) != 0) throw new InvalidOperationException("The native container is read-only (AsReadOnly or [ReadOnly] in a job); it can not be written.");
+            throw new InvalidOperationException(NovaEngine.Jobs.JobScheduler.DescribeLock((IntPtr)handle.node, "write to"));
         }
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal static void ThrowDisposed() => throw new ObjectDisposedException("The native container has been deallocated (Dispose, or a Temp allocation from an earlier frame); all copies of it are now invalid.");
     }
+
+    /// <summary>NativeContainer 형식 표시 (Unity 와 같은 이름) — 잡 예약이 이 특성이 붙은 필드 (안에 m_Safety) 를 찾아 검사한다</summary>
+    [AttributeUsage(AttributeTargets.Struct)] public sealed class NativeContainerAttribute : Attribute { }
+    /// <summary>늘 읽기만 하는 컨테이너 (NativeArray.ReadOnly)</summary>
+    [AttributeUsage(AttributeTargets.Struct)] public sealed class NativeContainerIsReadOnlyAttribute : Attribute { }
+    /// <summary>여러 잡이 함께 써도 되는 쓰기 전용 (ParallelWriter)</summary>
+    [AttributeUsage(AttributeTargets.Struct)] public sealed class NativeContainerIsAtomicWriteOnlyAttribute : Attribute { }
+    /// <summary>IJobParallelFor 에서 자기 묶음 범위만 쓰도록 m_MinIndex · m_MaxIndex 를 좁힐 수 있다 (NativeArray)</summary>
+    [AttributeUsage(AttributeTargets.Struct)] public sealed class NativeContainerSupportsMinMaxWriteRestrictionAttribute : Attribute { }
+    /// <summary>[DeallocateOnJobCompletion] 을 받는다</summary>
+    [AttributeUsage(AttributeTargets.Struct)] public sealed class NativeContainerSupportsDeallocateOnJobCompletionAttribute : Attribute { }
 
     // 안전 노드 풀: 덩어리로 받아 두고 되쓴다 (Version 은 계속 올라가므로 옛 핸들은 다시 맞지 않는다)
     internal static unsafe class SafetyPool
@@ -198,7 +218,7 @@ namespace NovaEngine.Collections.LowLevel.Unsafe
                 n = (SafetyNode*)s_Free.Pop();
                 s_Live++;
             }
-            n->Flags = 0; n->WriterJob = 0; n->ReaderJobs = 0;
+            n->Flags = 0; n->JobLocks = 0;
             return new AtomicSafetyHandle { node = n, version = n->Version };
         }
 
@@ -397,7 +417,7 @@ namespace NovaEngine.Collections.LowLevel.Unsafe
         {
             if (!CollectionChecks.Enabled) return default;
             AtomicSafetyHandle h = AtomicSafetyHandle.Create();
-            if (allocator == Allocator.Temp) TempArena.Current.Track(h);
+            if (allocator == Allocator.Temp) { h.node->Flags |= AtomicSafetyHandle.kFlagTemp; TempArena.Current.Track(h); }
             else AllocationTracker.Attach(allocation, h, owner);
             return h;
         }

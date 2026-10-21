@@ -320,6 +320,9 @@ namespace NovaEngine.Interop
         public delegate* unmanaged<int, int, int> App_LoadingPriority;           // Application.backgroundLoadingPriority (set, value) → 지금 값
         public delegate* unmanaged<ulong, byte*, int, float*, void> COL_Get;     // Collider 값 (네이티브 타입 이름, 0 isTrigger 1 center 2 size 3 Sphere radius 4 Capsule radius 5 height 6 direction)
         public delegate* unmanaged<ulong, byte*, int, float*, void> COL_Set;
+        public delegate* unmanaged<byte*, long*, ushort*, int> Prof_Begin;     // Profiler: 0 꺼짐, 1 메인 스레드, 2 다른 스레드 (시작 시각 · 깊이를 돌려줌)
+        public delegate* unmanaged<int, byte*, long, ushort, void> Prof_End;
+        public delegate* unmanaged<byte*, void> Prof_SetThreadName;
     }
 
     internal static unsafe class Native

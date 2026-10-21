@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -7329,6 +7329,318 @@ public class MCFrames : MonoBehaviour
     finally { Stop-TestEditor $ed | Out-Null }
 }
 
+# C# 고성능 경로 B-2: C# Job System (IJob · IJobFor · IJobParallelFor · IJobParallelForBatch · JobHandle) — Unity.Jobs 와 같은 규칙
+#  여러 작업 스레드, 의존성, 안전 검사 (Complete 전 접근 · 의존성 없는 같은 컨테이너 · Temp · 묶음 밖 쓰기 · 참조형 잡 · 별칭), ParallelWriter,
+#  [DeallocateOnJobCompletion] · Dispose(JobHandle), 잡 안 예외, Profiler 스레드 줄, 한 스레드 대비 배수
+function Suite-CsJobs
+{
+    Write-Host '[csjobs]'
+    $dir = Join-Path $Project 'Assets\CsJobTest'
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Threading;
+using NovaEngine;
+using NovaEngine.Mathematics;
+using NovaEngine.Collections;
+using NovaEngine.Jobs;
+using NovaEngine.Jobs.LowLevel.Unsafe;
+
+public struct CJAdd : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float> a;
+    [ReadOnly] public NativeArray<float> b;
+    public NativeArray<float> result;
+    public void Execute(int i) => result[i] = a[i] + b[i];
+}
+public struct CJScale : IJobParallelFor
+{
+    public NativeArray<float> data;
+    public float factor;
+    public void Execute(int i) => data[i] *= factor;
+}
+public struct CJSum : IJob
+{
+    [ReadOnly] public NativeArray<float> data;
+    public NativeReference<double> sum;
+    public void Execute() { double s = 0; for (int i = 0; i < data.Length; i++) s += data[i]; sum.Value = s; }
+}
+public struct CJThread : IJobParallelFor
+{
+    public NativeArray<int> threadOf;
+    public void Execute(int i) { threadOf[i] = JobsUtility.ThreadIndex; Thread.SpinWait(20000); }
+}
+public struct CJNeighbor : IJobParallelFor
+{
+    public NativeArray<int> data;
+    public void Execute(int i) { data[(i + 1) % data.Length] = i; }
+}
+public struct CJFilter : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<int> input;
+    public NativeList<int>.ParallelWriter output;
+    public void Execute(int i) { if (input[i] % 3 == 0) output.AddNoResize(input[i]); }
+}
+public struct CJHash : IJobParallelFor
+{
+    public NativeHashMap<int, int>.ParallelWriter map;
+    public void Execute(int i) => map.TryAdd(i, i * 2);
+}
+public struct CJListInParallel : IJobParallelFor
+{
+    public NativeList<int> list;
+    public void Execute(int i) { }
+}
+public struct CJPrefix : IJobFor
+{
+    public NativeArray<int> data;
+    public void Execute(int i) => data[i] = i > 0 ? data[i - 1] + i : 0;
+}
+public struct CJDealloc : IJob
+{
+    [DeallocateOnJobCompletion] public NativeArray<int> temp;
+    public NativeReference<int> result;
+    public void Execute() => result.Value = temp[0] + temp[1];
+}
+public struct CJBatch : IJobParallelForBatch
+{
+    public NativeArray<int> data;
+    public void Execute(int start, int count) { for (int i = start; i < start + count; i++) data[i] = count; }
+}
+public struct CJThrow : IJob { public void Execute() => throw new InvalidOperationException("boom from a job"); }
+public struct CJLong : IJob { public NativeReference<int> done; public void Execute() { Thread.Sleep(300); done.Value = 1; } }
+public struct CJRef : IJob { public string name; public void Execute() { } }
+public struct CJBoids : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<float3> pos;
+    public NativeArray<float3> vel;
+    public float dt;
+    public void Execute(int i)
+    {
+        float3 p = pos[i], v = vel[i];
+        for (int k = 0; k < 8; k++) { v += math.normalizesafe(-p) * dt; v *= 0.99f; p += v * dt; }
+        vel[i] = v;
+    }
+}
+
+public static class CJTest
+{
+    static List<string> s_Fail;
+    static void Check(bool ok, string what) { if (!ok) s_Fail.Add(what); }
+    static string Catch(Action a) { try { a(); return "none"; } catch (Exception e) { return e.GetType().Name + ": " + e.Message; } }
+    static string Result(string name) => s_Fail.Count == 0 ? name + ":ok" : name + ":" + string.Join(" | ", s_Fail);
+
+    public static string Basics()
+    {
+        s_Fail = new List<string>();
+        int live0 = NativeLeakDetection.LiveAllocations;
+        const int N = 100000;
+        var a = new NativeArray<float>(N, Allocator.TempJob);
+        var b = new NativeArray<float>(N, Allocator.TempJob);
+        var r = new NativeArray<float>(N, Allocator.TempJob);
+        var sum = new NativeReference<double>(Allocator.TempJob);
+        for (int i = 0; i < N; i++) { a[i] = i; b[i] = 1; }
+        JobHandle add = new CJAdd { a = a, b = b, result = r }.Schedule(N, 256);
+        JobHandle scale = new CJScale { data = r, factor = 2 }.Schedule(N, 256, add);
+        JobHandle total = new CJSum { data = r, sum = sum }.Schedule(scale);
+        total.Complete();
+        double expect = 0; for (int i = 0; i < N; i++) expect += (i + 1) * 2.0;
+        Check(r[0] == 2 && r[N - 1] == N * 2 && System.Math.Abs(sum.Value - expect) < 1, "chain add -> scale -> sum (" + sum.Value + " vs " + expect + ")");
+        Check(add.IsCompleted && scale.IsCompleted, "IsCompleted after Complete");
+
+        // 여러 스레드에서
+        var th = new NativeArray<int>(512, Allocator.TempJob);
+        new CJThread { threadOf = th }.Schedule(th.Length, 1).Complete();
+        var seen = new HashSet<int>(); for (int i = 0; i < th.Length; i++) seen.Add(th[i]);
+        Check(JobsUtility.JobWorkerCount >= 1 && seen.Count >= System.Math.Min(3, JobsUtility.JobWorkerCount + 1), "ran on " + seen.Count + " threads (workers " + JobsUtility.JobWorkerCount + ")");
+        string threads = seen.Count.ToString();
+
+        // IJobFor: Schedule = 한 스레드 차례로 (앞 원소에 기대도 된다), Run = 지금 여기
+        var pre = new NativeArray<int>(1000, Allocator.TempJob);
+        new CJPrefix { data = pre }.Schedule(pre.Length, default).Complete();
+        Check(pre[999] == 999 * 1000 / 2, "IJobFor.Schedule runs in order (prefix sum " + pre[999] + ")");
+        var pre2 = new NativeArray<int>(10, Allocator.TempJob);
+        new CJPrefix { data = pre2 }.Run(pre2.Length);
+        Check(pre2[9] == 45, "IJobFor.Run");
+
+        // 묶음 잡
+        var bt = new NativeArray<int>(1000, Allocator.TempJob);
+        new CJBatch { data = bt }.ScheduleBatch(bt.Length, 64).Complete();
+        Check(bt[0] == 64 && bt[999] == 1000 - 960, "IJobParallelForBatch (" + bt[0] + ", " + bt[999] + ")");
+
+        // ParallelWriter
+        var input = new NativeArray<int>(30000, Allocator.TempJob);
+        for (int i = 0; i < input.Length; i++) input[i] = i;
+        var output = new NativeList<int>(input.Length, Allocator.TempJob);
+        new CJFilter { input = input, output = output.AsParallelWriter() }.Schedule(input.Length, 64).Complete();
+        output.Sort();
+        bool filtered = output.Length == 10000; for (int i = 0; i < output.Length && filtered; i++) filtered = output[i] == i * 3;
+        Check(filtered, "NativeList.ParallelWriter.AddNoResize (" + output.Length + ")");
+        var map = new NativeHashMap<int, int>(16, Allocator.TempJob);
+        new CJHash { map = map.AsParallelWriter() }.Schedule(20000, 32).Complete();
+        Check(map.Count == 20000 && map[123] == 246, "NativeHashMap.ParallelWriter.TryAdd (" + map.Count + ")");
+
+        // CombineDependencies
+        var c1 = new NativeArray<float>(1000, Allocator.TempJob); var c2 = new NativeArray<float>(1000, Allocator.TempJob);
+        for (int i = 0; i < 1000; i++) { c1[i] = 1; c2[i] = 1; }
+        JobHandle j1 = new CJScale { data = c1, factor = 3 }.Schedule(1000, 64);
+        JobHandle j2 = new CJScale { data = c2, factor = 5 }.Schedule(1000, 64);
+        JobHandle.CombineDependencies(j1, j2).Complete();
+        Check(c1[500] == 3 && c2[500] == 5, "CombineDependencies");
+
+        // [DeallocateOnJobCompletion] · Dispose(JobHandle)
+        var tmp = new NativeArray<int>(2, Allocator.TempJob); tmp[0] = 20; tmp[1] = 22;
+        var res = new NativeReference<int>(Allocator.TempJob);
+        new CJDealloc { temp = tmp, result = res }.Schedule().Complete();
+        Check(res.Value == 42, "[DeallocateOnJobCompletion] job result");
+        JobHandle disposing = a.Dispose(default);
+        disposing = b.Dispose(disposing);
+        disposing.Complete();
+        Check(!a.IsCreated && Catch(() => { float x = b[0]; }).StartsWith("ObjectDisposedException"), "Dispose(JobHandle)");
+
+        // 작업 스레드 0: 메인이 Complete 에서 모두 돈다
+        int workers = JobsUtility.JobWorkerCount;
+        JobsUtility.JobWorkerCount = 0;
+        var z = new NativeArray<float>(5000, Allocator.TempJob);
+        for (int i = 0; i < z.Length; i++) z[i] = 1;
+        new CJScale { data = z, factor = 7 }.Schedule(z.Length, 100).Complete();
+        JobsUtility.JobWorkerCount = workers;
+        Check(z[4999] == 7, "JobWorkerCount = 0 (main thread runs it)");
+
+        foreach (var d in new IDisposable[] { r, sum, th, pre, pre2, bt, input, output, map, c1, c2, res, z }) d.Dispose();
+        Check(NativeLeakDetection.LiveAllocations == live0, "nothing left (" + NativeLeakDetection.LiveAllocations + " vs " + live0 + ")");
+        return Result("basics") + "|threads " + threads;
+    }
+
+    public static string Safety()
+    {
+        s_Fail = new List<string>();
+        var data = new NativeArray<float>(10000, Allocator.TempJob);
+        var other = new NativeArray<float>(10000, Allocator.TempJob);
+        JobHandle h = new CJScale { data = data, factor = 2 }.Schedule(data.Length, 64);
+        string read = Catch(() => { float x = data[0]; });
+        Check(read.StartsWith("InvalidOperationException") && read.Contains("CJScale") && read.Contains("JobHandle.Complete()"), "main thread read while the job writes: " + read);
+        string second = Catch(() => new CJScale { data = data, factor = 3 }.Schedule(data.Length, 64));
+        Check(second.Contains("must include CJScale as a dependency"), "second writer without dependency: " + second);
+        string dispose = Catch(() => data.Dispose());
+        Check(dispose.Contains("Dispose(JobHandle)"), "Dispose while a job uses it: " + dispose);
+        JobHandle h2 = new CJScale { data = data, factor = 3 }.Schedule(data.Length, 64, h);
+        h2.Complete();
+        Check(data[0] == 0 && Catch(() => { data[0] = 1; }) == "none", "after Complete the main thread owns it again");
+        // 읽기만 하는 잡 둘은 의존성 없이 함께
+        var s1 = new NativeReference<double>(Allocator.TempJob); var s2 = new NativeReference<double>(Allocator.TempJob);
+        JobHandle r1 = new CJSum { data = data, sum = s1 }.Schedule();
+        string r2err = Catch(() => new CJSum { data = data, sum = s2 }.Schedule().Complete());
+        r1.Complete();
+        Check(r2err == "none", "two [ReadOnly] jobs together: " + r2err);
+        string tmp = Catch(() => { var t = new NativeArray<float>(4, Allocator.Temp); new CJScale { data = t, factor = 1 }.Schedule(4, 1).Complete(); });
+        Check(tmp.Contains("Allocator.Temp"), "Temp into a job: " + tmp);
+        string list = Catch(() => { var l = new NativeList<int>(Allocator.TempJob); try { new CJListInParallel { list = l }.Schedule(4, 1).Complete(); } finally { l.Dispose(); } });
+        Check(list.Contains("[ReadOnly]") && list.Contains("parallel"), "NativeList written in IJobParallelFor: " + list);
+        string refJob = Catch(() => new CJRef { name = "x" }.Schedule().Complete());
+        Check(refJob.Contains("reference types"), "job with a reference field: " + refJob);
+        string alias = Catch(() => new CJAdd { a = other, b = other, result = other }.Schedule(other.Length, 64).Complete());
+        Check(alias.Contains("aliasing"), "same array as input and output: " + alias);
+        string fromJob = Catch(() => new CJScale { data = other, factor = 1 }.Run(other.Length));
+        Check(fromJob == "none", "IJobParallelFor.Run: " + fromJob);
+        foreach (var d in new IDisposable[] { data, other, s1, s2 }) d.Dispose();
+        return Result("safety");
+    }
+
+    // 잡 안 예외 (묶음 밖 쓰기 · throw) → 메인 스레드 Console. Complete 는 그대로 돌아온다
+    public static string Errors()
+    {
+        var n = new NativeArray<int>(256, Allocator.TempJob);
+        string a = Catch(() => new CJNeighbor { data = n }.Schedule(n.Length, 16).Complete());
+        string b = Catch(() => new CJThrow().Schedule().Complete());
+        n.Dispose();
+        return a + "|" + b;
+    }
+
+    public static string Bench()
+    {
+        const int N = 200000;
+        var pos = new NativeArray<float3>(N, Allocator.TempJob);
+        var vel = new NativeArray<float3>(N, Allocator.TempJob);
+        var rnd = new NovaEngine.Mathematics.Random(7);
+        for (int i = 0; i < N; i++) pos[i] = rnd.NextFloat3(-50, 50);
+        var job = new CJBoids { pos = pos, vel = vel, dt = 0.016f };
+        job.Run(N);   // JIT 데우기
+        new CJBoids { pos = pos, vel = vel, dt = 0.016f }.Schedule(N, 512).Complete();
+        var sw = Stopwatch.StartNew();
+        for (int k = 0; k < 3; k++) new CJBoids { pos = pos, vel = vel, dt = 0.016f }.Run(N);
+        double single = sw.Elapsed.TotalMilliseconds / 3; sw.Restart();
+        for (int k = 0; k < 3; k++) new CJBoids { pos = pos, vel = vel, dt = 0.016f }.Schedule(N, 512).Complete();
+        double parallel = sw.Elapsed.TotalMilliseconds / 3;
+        pos.Dispose(); vel.Dispose();
+        return string.Format(CultureInfo.InvariantCulture, "{0:F1}|{1:F1}|{2:F2}|{3}", single, parallel, single / parallel, JobsUtility.JobWorkerCount);
+    }
+
+    public static string StartLong()
+    {
+        s_Long = new NativeReference<int>(Allocator.Persistent);
+        s_LongHandle = new CJLong { done = s_Long }.Schedule();
+        return "scheduled";
+    }
+    static NativeReference<int> s_Long;
+    static JobHandle s_LongHandle;
+    public static string AfterStop() { try { return "value " + s_Long.Value; } catch (Exception e) { return e.GetType().Name; } }
+}
+
+// Profiler: 프레임마다 잡 (작업 스레드 줄이 생긴다)
+public class CJDriver : MonoBehaviour
+{
+    NativeArray<float3> m_Pos, m_Vel;
+    JobHandle m_Handle;
+    void Start() { m_Pos = new NativeArray<float3>(50000, Allocator.Persistent); m_Vel = new NativeArray<float3>(50000, Allocator.Persistent); }
+    void Update() { m_Handle = new CJBoids { pos = m_Pos, vel = m_Vel, dt = Time.deltaTime }.Schedule(m_Pos.Length, 256); }
+    void LateUpdate() { m_Handle.Complete(); }
+    void OnDestroy() { m_Handle.Complete(); m_Pos.Dispose(); m_Vel.Dispose(); }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $dir 'CsJobTests.cs')
+    $cs = Join-Path $Out 'csjobs.cs'
+    function Exec([string]$code) { $code | Set-Content -Encoding utf8 $cs; "$((Invoke-NovaJson "exec --file $cs").result)" }
+    $ed = Start-TestEditor
+    try
+    {
+        Wait-Compile
+        Invoke-Nova 'scene new --force' | Out-Null
+        Invoke-Nova 'create empty --name CJ' | Out-Null
+        Invoke-Nova 'add-component CJ CJDriver' | Out-Null
+        Invoke-Nova 'play' | Out-Null
+        Invoke-Nova 'wait 10' | Out-Null
+        $b = Exec 'return CJTest.Basics();'
+        Add-Result csjobs 'IJobParallelFor chain (dependencies), many worker threads, IJobFor Schedule/Run, IJobParallelForBatch, ParallelWriter (list · hash map), CombineDependencies, DeallocateOnJobCompletion, Dispose(JobHandle), 0 workers' ($b -like 'basics:ok*') $b
+        $s = Exec 'return CJTest.Safety();'
+        Add-Result csjobs 'safety: read before Complete, second writer without dependency, Dispose while used, readers together, Temp, NativeList in parallel, reference field, aliasing (Unity messages)' ($s -eq 'safety:ok') $s
+        $e = Exec 'return CJTest.Errors();'
+        $log = Invoke-Nova 'log -n 80 --grep "Exception in job"'
+        $restricted = "$log" -match 'CJNeighbor' -and "$log" -match 'restricted IJobParallelFor range'
+        $thrown = "$log" -match 'CJThrow' -and "$log" -match 'boom from a job'
+        Add-Result csjobs 'exceptions inside jobs (write outside the batch range, throw) go to the Console; Complete returns' ($e -eq 'none|none' -and $restricted -and $thrown) ("complete: {0}; neighbor logged {1}, throw logged {2}" -f $e, $restricted, $thrown)
+        $perf = Invoke-NovaJson 'perf --frames 30'
+        $names = @($perf.threads | ForEach-Object { $_.name })
+        Add-Result csjobs 'Profiler: C# job worker threads appear (Timeline rows)' (($names | Where-Object { $_ -like 'C# Job Worker*' }).Count -ge 1) (($names | Where-Object { $_ -like 'C#*' }) -join ', ')
+        $bench = (Exec 'return CJTest.Bench();') -split '\|'
+        $speed = [double]::Parse($bench[2], [Globalization.CultureInfo]::InvariantCulture)
+        Add-Result csjobs 'boids 200k × 8 steps: Schedule (all workers) vs Run (one thread)' ($speed -gt 1.8) ("Run {0} ms, Schedule {1} ms → x{2} with {3} workers (game scripts are still a Debug build)" -f $bench[0], $bench[1], $bench[2], $bench[3])
+        $long = Exec 'return CJTest.StartLong();'
+        Invoke-Nova 'stop' | Out-Null
+        Invoke-Nova 'wait 5' | Out-Null
+        $leak = Invoke-Nova 'log -n 30 --grep "has not been disposed"'
+        Invoke-Nova 'play' | Out-Null
+        Invoke-Nova 'wait 5' | Out-Null
+        $after = Exec 'return CJTest.AfterStop();'
+        Invoke-Nova 'stop' | Out-Null
+        Add-Result csjobs 'stopping Play while a job runs: waits for it, then the leak report frees its NativeReference' ("$leak" -match 'NativeReference<Int32>' -and $after -eq 'ObjectDisposedException') ("{0}; after: {1}" -f (("$leak".Trim() -split "`r?`n") | Select-Object -Last 1), $after)
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+}
+
 function Capture-Scenes([switch]$OpenGL, [switch]$Vulkan, [switch]$D3D12, [string]$dir)
 {
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -9962,6 +10274,7 @@ try
                 'fogvolume' { Suite-FogVolume }
                 'ssgi' { Suite-Ssgi }
                 'mathcollections' { Suite-MathCollections }
+                'csjobs' { Suite-CsJobs }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }

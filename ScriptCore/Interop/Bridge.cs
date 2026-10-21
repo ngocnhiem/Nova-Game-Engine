@@ -69,7 +69,11 @@ namespace NovaEngine.Interop
         public static void BeginFrame()
         {
             FrameIndex++;
-            try { NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.BeginFrame(); }   // Temp 되돌림 · TempJob 수명
+            try
+            {
+                NovaEngine.Jobs.JobScheduler.FlushErrors();   // 잡 안 예외 → Console
+                NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.BeginFrame();   // Temp 되돌림 · TempJob 수명
+            }
             catch (Exception e) { LogException(e); }
         }
 
@@ -79,7 +83,11 @@ namespace NovaEngine.Interop
         {
             try
             {
-                if (kind == 0) NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("end of Play");
+                if (kind == 0)
+                {
+                    NovaEngine.Jobs.JobScheduler.CompleteAll();   // 도는 잡 (게임 코드) 을 끝내고 잠금을 푼 뒤
+                    NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("end of Play");
+                }
             }
             catch (Exception e) { LogException(e); }
         }
@@ -185,7 +193,11 @@ namespace NovaEngine.Interop
 
         static void UnloadInternal()
         {
-            try { NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("script reload"); }
+            try
+            {
+                NovaEngine.Jobs.JobScheduler.CompleteAll();   // 게임 어셈블리를 내리기 전에 그 코드를 도는 잡이 없게
+                NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("script reload");
+            }
             catch (Exception e) { LogException(e); }
             ScriptRegistry.Clear();
             NovaEngine.UI.UIEvents.Clear();   // 리스너가 게임 어셈블리를 붙잡지 않게
