@@ -10,6 +10,8 @@
 #include "PhysicsSettings.h"
 #include "Debug.h"
 #include "Profiler.h"
+#include "JobSystem.h"
+#include <unordered_set>
 #include "ScriptBindings.h"
 #include "ScriptEngine.h"
 #include "CSharpScript.h"
@@ -86,6 +88,9 @@ namespace
 		uint64 gameObject;
 	};
 
+	// C# Job System · Mesh 바인딩의 형식 (아래 표가 쓴다 — 함수는 이 파일 뒤쪽)
+	struct TransformAccessData;
+	struct RaycastCommandData;
 	struct NativeApiTable
 	{
 		int Size;
@@ -334,6 +339,24 @@ namespace
 		int(*Prof_Begin)(const char*, int64_t*, uint16_t*);   // 0 꺼짐, 1 메인 스레드 (중첩 스택), 2 다른 스레드 (시작 시각을 돌려줌)
 		void(*Prof_End)(int, const char*, int64_t, uint16_t);
 		void(*Prof_SetThreadName)(const char*);
+
+		// C# Job System 과 엔진: TransformAccessArray (모으기 · 되쓰기), RaycastCommand (묶음), C# Mesh (런타임 메시)
+		int(*TR_Gather)(const uint64*, int, TransformAccessData*);
+		int(*TR_Scatter)(const uint64*, int, const TransformAccessData*);
+		int(*PH_RaycastBatch)(const RaycastCommandData*, int, RaycastData*, int);
+		int(*MESH_Create)();
+		void(*MESH_Release)(int);
+		int(*MESH_FromFilter)(uint64);
+		int(*MESH_SetToFilter)(uint64, int);
+		int(*MESH_GetInt)(int, int);
+		u8* (*MESH_GetName)(int);
+		void(*MESH_SetName)(int, u8*);
+		int(*MESH_SetAttr)(int, int, const float*, int, int, int);
+		int(*MESH_GetAttr)(int, int, float*, int, int);
+		int(*MESH_SetIndices)(int, const void*, int, int);
+		int(*MESH_GetIndices)(int, int*, int);
+		void(*MESH_Op)(int, int);
+		void(*MESH_Bounds)(int, Vec3*, Vec3*);
 	};
 
 	// ---------------------------------------------------------------- 공용
@@ -1489,6 +1512,378 @@ namespace
 		}
 		g->Mode = mode == (int)ParticleGradientMode::TwoColors ? ParticleGradientMode::TwoColors : ParticleGradientMode::Color;
 	}
+
+	// ---------------------------------------------------------------- C# Job System 과 엔진 (TransformAccessArray · RaycastCommand)
+	// TransformAccessArray: 예약할 때 메인 스레드가 모으고 (TR_Gather) 작업 스레드가 사본을 고친 뒤 Complete 때 되쓴다 (TR_Scatter) — 엔진 Transform 은 메인만 만진다
+	struct TransformAccessData   // ScriptCore/Engine/Jobs/EngineJobs.cs 와 같은 배치
+	{
+		Vec3 position;
+		Quaternion rotation;
+		Vec3 localPosition;
+		Quaternion localRotation;
+		Vec3 localScale;
+		Vec3 lossyScale;
+		int flags;
+		int pad;
+	};
+	static_assert(sizeof(TransformAccessData) == 88, "TransformAccessData layout must match C#");
+	enum : int { kTAValid = 1, kTAPosition = 2, kTARotation = 4, kTALocalPosition = 8, kTALocalRotation = 16, kTALocalScale = 32 };
+
+	int TR_Gather(const uint64* ids, int count, TransformAccessData* out)
+	{
+		if (ids == nullptr || out == nullptr) return 0;
+		int valid = 0;
+		for (int i = 0; i < count; ++i)
+		{
+			TransformAccessData& d = out[i];
+			GameObject* g = Find(ids[i]);
+			if (g == nullptr)
+			{
+				d = TransformAccessData{};
+				d.rotation = d.localRotation = Quaternion::Identity;
+				d.localScale = d.lossyScale = Vec3::One;
+				continue;
+			}
+			Transform* t = g->GetTransform();
+			d.position = t->GetPosition();
+			d.rotation = t->GetRotation();
+			d.localPosition = t->GetLocalPosition();
+			d.localRotation = t->GetLocalRotation();
+			d.localScale = t->GetLocalScale();
+			d.lossyScale = t->GetScale();
+			d.flags = kTAValid;
+			d.pad = 0;
+			++valid;
+		}
+		return valid;
+	}
+
+	// 잡이 바꾼 값만 (로컬 먼저, 월드가 이긴다)
+	int TR_Scatter(const uint64* ids, int count, const TransformAccessData* in)
+	{
+		if (ids == nullptr || in == nullptr) return 0;
+		int written = 0;
+		for (int i = 0; i < count; ++i)
+		{
+			const TransformAccessData& d = in[i];
+			const int f = d.flags;
+			if ((f & kTAValid) == 0 || (f & ~kTAValid) == 0) continue;
+			GameObject* g = Find(ids[i]);
+			if (g == nullptr) continue;
+			Transform* t = g->GetTransform();
+			if (f & kTALocalScale) t->SetLocalScale(d.localScale);
+			if (f & kTALocalRotation) t->SetLocalRotation(d.localRotation);
+			if (f & kTALocalPosition) t->SetLocalPosition(d.localPosition);
+			if (f & kTARotation) t->SetRotation(d.rotation);
+			if (f & kTAPosition) t->SetPosition(d.position);
+			++written;
+		}
+		return written;
+	}
+
+	// RaycastCommand (C# 와 같은 48 바이트) — 메인 스레드가 부르면 렌더링과 겹친 물리 스텝을 끝내고 엔진 Job System 으로 나눠 쏜다 (네이티브, 병렬)
+	struct RaycastCommandData
+	{
+		Vec3 from;
+		Vec3 direction;
+		int layerMask;
+		uint8_t hitMultipleFaces, pad0[3];
+		int hitTriggers;          // QueryTriggerInteraction: 0 UseGlobal (= Ignore, C# Physics.Raycast 와 같다), 1 Ignore, 2 Collide
+		uint8_t hitBackfaces, pad1[3];
+		float distance;
+		int physicsScene;
+	};
+	static_assert(sizeof(RaycastCommandData) == 48, "RaycastCommand layout must match C#");
+	static_assert(sizeof(RaycastData) == 40, "RaycastHit layout must match C#");
+
+	int PH_RaycastBatch(const RaycastCommandData* cmds, int count, RaycastData* results, int maxHits)
+	{
+		if (cmds == nullptr || results == nullptr || count <= 0) return 0;
+		maxHits = (std::max)(1, maxHits);
+		PhysicsManager* pm = PhysicsManager::GetI();
+		pm->CompleteAsync();   // 그 뒤 일꾼은 물리 월드를 읽기만 한다 (메인은 ParallelFor 가 끝날 때까지 기다린다)
+		std::atomic<int> hits{ 0 };
+		Jobs::ParallelFor(count, 16, [&](int begin, int end) {
+			std::vector<RaycastHit> all;
+			for (int i = begin; i < end; ++i)
+			{
+				const RaycastCommandData& c = cmds[i];
+				RaycastData* out = results + (size_t)i * maxHits;
+				for (int k = 0; k < maxHits; ++k) out[k] = RaycastData{};
+				Vec3 dir = c.direction;
+				const float len = dir.Length();
+				if (len < 1e-6f || !(c.distance > 0.0f)) continue;
+				dir /= len;
+				const float dist = (std::min)(c.distance, 1.0e6f);   // Unity 기본 float.MaxValue
+				const bool triggers = c.hitTriggers == 2;
+				if (maxHits == 1)
+				{
+					RaycastHit h;
+					if (!pm->Raycast(c.from, dir, h, dist, triggers, (uint32)c.layerMask)) continue;
+					out[0].point = h.point;
+					out[0].normal = h.normal;
+					out[0].distance = h.distance;
+					out[0].gameObject = h.gameObject ? h.gameObject->GetFileID() : 0;
+					hits.fetch_add(1, std::memory_order_relaxed);
+					continue;
+				}
+				all.resize((size_t)(std::min)(maxHits * 4, 256));
+				const int n = pm->RaycastAll(c.from, dir, dist, all.data(), (int)all.size(), false);
+				int w = 0;
+				for (int k = 0; k < n && w < maxHits; ++k)
+				{
+					const RaycastHit& h = all[k];
+					if (h.gameObject == nullptr || !(c.layerMask & (1 << h.gameObject->GetLayerIndex()))) continue;
+					if (!triggers && h.collider && h.collider->IsTrigger()) continue;
+					out[w].point = h.point;
+					out[w].normal = h.normal;
+					out[w].distance = h.distance;
+					out[w].gameObject = h.gameObject->GetFileID();
+					++w;
+				}
+				hits.fetch_add(w, std::memory_order_relaxed);
+			}
+		});
+		return hits.load();
+	}
+
+	// ---------------------------------------------------------------- C# Mesh (런타임 메시 — new Mesh(), SetVertices · SetTriangles, MeshFilter.mesh)
+	// 손잡이 (int) → 메시. 같은 메시는 같은 손잡이 (C# 에서 같은 객체). 바뀐 메시는 프레임마다 (ScriptBindings::Update) GPU 로 올린다
+	std::unordered_map<int, std::shared_ptr<Mesh>> s_ScriptMeshes;
+	std::unordered_map<Mesh*, int> s_ScriptMeshHandles;
+	std::unordered_set<int> s_DirtyMeshes;
+	int s_NextMeshHandle = 1;
+
+	int RegisterMesh(const std::shared_ptr<Mesh>& m)
+	{
+		auto it = s_ScriptMeshHandles.find(m.get());
+		if (it != s_ScriptMeshHandles.end()) return it->second;
+		const int h = s_NextMeshHandle++;
+		s_ScriptMeshes[h] = m;
+		s_ScriptMeshHandles[m.get()] = h;
+		return h;
+	}
+	Mesh* MeshOf(int h) { auto it = s_ScriptMeshes.find(h); return it == s_ScriptMeshes.end() ? nullptr : it->second.get(); }
+
+	void UploadMesh(Mesh* m)
+	{
+		if (m->Vertices.empty() || m->Indices.empty()) return;
+		const size_t vc = m->Vertices.size();
+		for (USHORT& i : m->Indices) if (i >= vc) i = 0;   // 범위 밖 색인 (GPU 가 엉뚱한 곳을 읽지 않게)
+		MeshGeometry::Subset s;
+		s.Id = 0;
+		s.VertexStart = 0;
+		s.VertexCount = (uint32)vc;
+		s.FaceStart = 0;
+		s.FaceCount = (uint32)(m->Indices.size() / 3);
+		s.MaterialIndex = 0;
+		m->Subsets.assign(1, s);
+		if (m->Mat.empty())
+		{
+			Material mat;
+			mat.Ambient = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
+			mat.Diffuse = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f);
+			mat.Specular = XMFLOAT4(0.4f, 0.4f, 0.4f, 16.0f);
+			m->Mat.push_back(mat);
+		}
+		m->Setup();
+		++MeshFilter::s_BindingSerial;   // 컬링이 경계 구를 다시 본다
+	}
+
+	int MESH_Create()
+	{
+		auto m = std::make_shared<Mesh>();
+		m->Name = "New Mesh";
+		return RegisterMesh(m);
+	}
+	void MESH_Release(int h)
+	{
+		auto it = s_ScriptMeshes.find(h);
+		if (it == s_ScriptMeshes.end()) return;
+		s_ScriptMeshHandles.erase(it->second.get());
+		s_DirtyMeshes.erase(h);
+		s_ScriptMeshes.erase(it);   // MeshFilter 가 들고 있으면 메시는 남는다 (shared_ptr)
+	}
+	// MeshFilter 의 메시 (없으면 0)
+	int MESH_FromFilter(uint64 go)
+	{
+		GameObject* g = Find(go);
+		MeshFilter* mf = g ? g->GetComponent<MeshFilter>() : nullptr;
+		return mf && mf->GetMesh() ? RegisterMesh(mf->GetMesh()) : 0;
+	}
+	// MeshFilter.mesh = (MeshFilter 가 없으면 0)
+	int MESH_SetToFilter(uint64 go, int h)
+	{
+		GameObject* g = Find(go);
+		MeshFilter* mf = g ? g->GetComponent<MeshFilter>() : nullptr;
+		if (mf == nullptr) return 0;
+		if (h == 0) { mf->SetMesh(nullptr, L"", 0); return 1; }
+		auto it = s_ScriptMeshes.find(h);
+		if (it == s_ScriptMeshes.end()) return 0;
+		if (s_DirtyMeshes.erase(h)) UploadMesh(it->second.get());
+		mf->SetMesh(it->second, L"", 0);
+		return 1;
+	}
+	// 0 vertexCount, 1 index count, 2 subMeshCount
+	int MESH_GetInt(int h, int what)
+	{
+		Mesh* m = MeshOf(h);
+		if (m == nullptr) return 0;
+		switch (what)
+		{
+		case 0: return (int)m->Vertices.size();
+		case 1: return (int)m->Indices.size();
+		default: return m->Indices.empty() ? 0 : 1;
+		}
+	}
+	u8* MESH_GetName(int h) { Mesh* m = MeshOf(h); return Ret(m ? m->Name : std::string()); }
+	void MESH_SetName(int h, u8* name) { if (Mesh* m = MeshOf(h)) m->Name = name ? (const char*)name : ""; }
+
+	// 정점 속성 쓰기: attr 0 position (3), 1 normal (3), 2 uv0 (2), 3 tangent (4). position 은 정점 수를 바꾼다, 나머지는 같아야. stride = 바이트
+	//  돌려준 값: 1 성공, 0 손잡이 · 수가 맞지 않음, -1 정점 65535 개 넘음 (16 비트 색인)
+	int MESH_SetAttr(int h, int attr, const float* data, int count, int dim, int stride)
+	{
+		Mesh* m = MeshOf(h);
+		if (m == nullptr || count < 0 || (count > 0 && data == nullptr)) return 0;
+		if (attr == 0)
+		{
+			if (count > 65535) return -1;
+			m->Vertices.resize((size_t)count);
+		}
+		else if ((size_t)count != m->Vertices.size())
+			return 0;
+		const uint8_t* p = (const uint8_t*)data;
+		if (stride <= 0) stride = dim * 4;
+		for (int i = 0; i < count; ++i, p += stride)
+		{
+			const float* v = (const float*)p;
+			Vertex::PosNormalTexTan2& o = m->Vertices[(size_t)i];
+			switch (attr)
+			{
+			case 0: o.pos = XMFLOAT3(v[0], dim > 1 ? v[1] : 0.0f, dim > 2 ? v[2] : 0.0f); break;
+			case 1: o.normal = XMFLOAT3(v[0], dim > 1 ? v[1] : 0.0f, dim > 2 ? v[2] : 0.0f); break;
+			case 2: o.tex = XMFLOAT2(v[0], dim > 1 ? v[1] : 0.0f); break;
+			default: o.tangentU = XMFLOAT4(v[0], dim > 1 ? v[1] : 0.0f, dim > 2 ? v[2] : 0.0f, dim > 3 ? v[3] : 1.0f); break;
+			}
+		}
+		s_DirtyMeshes.insert(h);
+		return 1;
+	}
+	int MESH_GetAttr(int h, int attr, float* out, int count, int dim)
+	{
+		Mesh* m = MeshOf(h);
+		if (m == nullptr || out == nullptr) return 0;
+		const int n = (std::min)(count, (int)m->Vertices.size());
+		for (int i = 0; i < n; ++i)
+		{
+			const Vertex::PosNormalTexTan2& v = m->Vertices[(size_t)i];
+			const float src[4] = {
+				attr == 0 ? v.pos.x : attr == 1 ? v.normal.x : attr == 2 ? v.tex.x : v.tangentU.x,
+				attr == 0 ? v.pos.y : attr == 1 ? v.normal.y : attr == 2 ? v.tex.y : v.tangentU.y,
+				attr == 0 ? v.pos.z : attr == 1 ? v.normal.z : attr == 2 ? 0.0f : v.tangentU.z,
+				attr == 3 ? v.tangentU.w : 0.0f };
+			for (int k = 0; k < dim; ++k) out[(size_t)i * dim + k] = src[k];
+		}
+		return n;
+	}
+	// 색인 (삼각형 셋씩). is16 = ushort 배열, 아니면 int
+	int MESH_SetIndices(int h, const void* data, int count, int is16)
+	{
+		Mesh* m = MeshOf(h);
+		if (m == nullptr || count < 0 || (count > 0 && data == nullptr)) return 0;
+		m->Indices.resize((size_t)count);
+		const int vc = (int)m->Vertices.size();
+		int bad = 0;
+		for (int i = 0; i < count; ++i)
+		{
+			const int v = is16 ? (int)((const uint16_t*)data)[i] : ((const int*)data)[i];
+			if (v < 0 || v >= vc) ++bad;
+			m->Indices[(size_t)i] = (USHORT)(std::clamp)(v, 0, 65535);
+		}
+		s_DirtyMeshes.insert(h);
+		return bad == 0 ? 1 : -2;   // -2: 정점 수 밖 색인이 있다 (Unity 와 같이 오류)
+	}
+	int MESH_GetIndices(int h, int* out, int count)
+	{
+		Mesh* m = MeshOf(h);
+		if (m == nullptr || out == nullptr) return 0;
+		const int n = (std::min)(count, (int)m->Indices.size());
+		for (int i = 0; i < n; ++i) out[i] = m->Indices[(size_t)i];
+		return n;
+	}
+	// 0 RecalculateNormals (면적 가중), 1 RecalculateBounds, 2 RecalculateTangents, 3 Clear, 4 지금 올리기 (UploadMeshData)
+	void MESH_Op(int h, int op)
+	{
+		Mesh* m = MeshOf(h);
+		if (m == nullptr) return;
+		auto& V = m->Vertices;
+		auto& I = m->Indices;
+		if (op == 0)
+		{
+			std::vector<Vec3> n(V.size(), Vec3::Zero);
+			for (size_t k = 0; k + 2 < I.size(); k += 3)
+			{
+				const Vec3 a(V[I[k]].pos), b(V[I[k + 1]].pos), c(V[I[k + 2]].pos);
+				const Vec3 f = (b - a).Cross(c - a);   // 시계 방향 (Unity 와 같은 왼손) → 바깥
+				n[I[k]] += f; n[I[k + 1]] += f; n[I[k + 2]] += f;
+			}
+			for (size_t i = 0; i < V.size(); ++i)
+			{
+				Vec3 v = n[i];
+				if (v.LengthSquared() > 1e-20f) v.Normalize(); else v = Vec3(0, 1, 0);
+				V[i].normal = XMFLOAT3(v.x, v.y, v.z);
+			}
+		}
+		else if (op == 2)
+		{
+			std::vector<Vec3> tan(V.size(), Vec3::Zero), bit(V.size(), Vec3::Zero);
+			for (size_t k = 0; k + 2 < I.size(); k += 3)
+			{
+				const auto& v0 = V[I[k]]; const auto& v1 = V[I[k + 1]]; const auto& v2 = V[I[k + 2]];
+				const Vec3 e1 = Vec3(v1.pos) - Vec3(v0.pos), e2 = Vec3(v2.pos) - Vec3(v0.pos);
+				const float du1 = v1.tex.x - v0.tex.x, dv1 = v1.tex.y - v0.tex.y, du2 = v2.tex.x - v0.tex.x, dv2 = v2.tex.y - v0.tex.y;
+				const float det = du1 * dv2 - du2 * dv1;
+				if (fabsf(det) < 1e-12f) continue;
+				const float r = 1.0f / det;
+				const Vec3 t = (e1 * dv2 - e2 * dv1) * r, b = (e2 * du1 - e1 * du2) * r;
+				for (int j = 0; j < 3; ++j) { tan[I[k + j]] += t; bit[I[k + j]] += b; }
+			}
+			for (size_t i = 0; i < V.size(); ++i)
+			{
+				const Vec3 nrm(V[i].normal);
+				Vec3 t = tan[i] - nrm * nrm.Dot(tan[i]);
+				if (t.LengthSquared() > 1e-20f) t.Normalize(); else t = Vec3(1, 0, 0);
+				const float w = nrm.Cross(t).Dot(bit[i]) < 0.0f ? -1.0f : 1.0f;
+				V[i].tangentU = XMFLOAT4(t.x, t.y, t.z, w);
+			}
+		}
+		else if (op == 3)
+		{
+			V.clear();
+			I.clear();
+			m->Subsets.clear();
+		}
+		if (op == 4) { s_DirtyMeshes.erase(h); UploadMesh(m); }
+		else s_DirtyMeshes.insert(h);
+	}
+	// 경계 (center, extents) — 정점에서
+	void MESH_Bounds(int h, Vec3* center, Vec3* extents)
+	{
+		Mesh* m = MeshOf(h);
+		Vec3 lo(FLT_MAX, FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+		if (m) for (const auto& v : m->Vertices) { lo = Vec3::Min(lo, Vec3(v.pos)); hi = Vec3::Max(hi, Vec3(v.pos)); }
+		if (!m || m->Vertices.empty()) lo = hi = Vec3::Zero;
+		if (center) *center = (lo + hi) * 0.5f;
+		if (extents) *extents = (hi - lo) * 0.5f;
+	}
+
+	void FlushScriptMeshes()
+	{
+		if (s_DirtyMeshes.empty()) return;
+		for (int h : s_DirtyMeshes)
+			if (Mesh* m = MeshOf(h)) UploadMesh(m);
+		s_DirtyMeshes.clear();
+	}
 }
 
 namespace ScriptBindings
@@ -1547,6 +1942,22 @@ namespace ScriptBindings
 		t.Prof_Begin = Prof_Begin;
 		t.Prof_End = Prof_End;
 		t.Prof_SetThreadName = Prof_SetThreadName;
+		t.TR_Gather = TR_Gather;
+		t.TR_Scatter = TR_Scatter;
+		t.PH_RaycastBatch = PH_RaycastBatch;
+		t.MESH_Create = MESH_Create;
+		t.MESH_Release = MESH_Release;
+		t.MESH_FromFilter = MESH_FromFilter;
+		t.MESH_SetToFilter = MESH_SetToFilter;
+		t.MESH_GetInt = MESH_GetInt;
+		t.MESH_GetName = MESH_GetName;
+		t.MESH_SetName = MESH_SetName;
+		t.MESH_SetAttr = MESH_SetAttr;
+		t.MESH_GetAttr = MESH_GetAttr;
+		t.MESH_SetIndices = MESH_SetIndices;
+		t.MESH_GetIndices = MESH_GetIndices;
+		t.MESH_Op = MESH_Op;
+		t.MESH_Bounds = MESH_Bounds;
 		t.PS_Call = PS_Call;
 		t.PS_GetFloat = PS_GetFloat;
 		t.PS_SetFloat = PS_SetFloat;
@@ -2103,6 +2514,7 @@ namespace ScriptBindings
 	void Update()
 	{
 		PlayerPrefsStore::Flush();   // 바뀐 PlayerPrefs 는 프레임마다 쓴다 (앱이 갑자기 꺼져도)
+		FlushScriptMeshes();         // C# 이 바꾼 메시를 GPU 로 (그리기 전에, 한 번만)
 		if (!Application::IsPlaying() || s_DelayedDestroys.empty())
 			return;
 		const float now = ScriptEngine::PlayTime();

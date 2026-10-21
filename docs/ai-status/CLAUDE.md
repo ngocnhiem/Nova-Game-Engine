@@ -1,13 +1,20 @@
 # NOVA Claude 작업 상태
 
-- 갱신 시각: 2026년 10월 21일 — **C# 고성능 경로 B-3: `[BurstCompile]` 1 단계** (같은 지시, 순서대로)
+- 갱신 시각: 2026년 10월 21일 — **C# 고성능 경로 B-5: 잡과 엔진 (Transform · 레이캐스트 · 메시)** (같은 지시, 순서대로)
+  - `ScriptCore/Engine/Jobs/EngineJobs.cs`: TransformAccessArray (NativeContainer, ids + 모으기 버퍼) · TransformAccess · IJobParallelForTransform (Schedule · ScheduleReadOnly · Run, 래퍼 `TransformJobData<T>` — `[JobWrapper]` 로 오류 문구는 사용자 잡 이름), Complete 때 되쓰기 (`JobScheduler.SetSyncCallback` — 기록에 메인 스레드 일), 프레임 시작에 남은 Transform 잡 마무리, RaycastCommand · QueryParameters · PhysicsScene
+  - `ScriptCore/Engine/Mesh.cs`: Mesh (new · 속성 · 색인 · Recalculate* · bounds · Destroy · Instantiate, 손잡이 캐시 · 파이널라이저 → 메인에서 풀기), MeshFilter (sharedMesh · mesh 사본), Mesh.MeshDataArray · MeshData (SetVertexBufferParams · GetVertexData · 색인 · 서브메시 · 읽기 도우미, Apply · AcquireReadOnly), `NovaEngine.Rendering` 정점 형식들. Components.cs 의 옛 Mesh (BlendShape 만) 를 옮김, RaycastHit.colliderInstanceID
+  - 네이티브 `ScriptBindings.cpp`: TR_Gather · TR_Scatter (88 바이트), PH_RaycastBatch (CompleteAsync 뒤 Jobs::ParallelFor, maxHits > 1 은 RaycastAll + 레이어 · 트리거 거르기), MESH_* (손잡이 표, 간격째 속성 쓰기, 노멀 · 탄젠트 계산, 프레임마다 `FlushScriptMeshes`)
+  - 문서 `docs/CSHARP_MESH.md`, CSHARP_JOBS (엔진과 잇기) · 로드맵 갱신, Showcase 299
+  - 검사: enginejobs 6/6 (빨간 격자 90 %, Transform 2000 개 잡 4.5 ms · 메인 8.4 ms), 회귀 animation · model · csjobs · behaviour 79/80 — model 의 "FBX character = VRM shape" 윤곽 맨 윗줄 20 px (두 캡처 모양은 같다, 가는 머리 가닥 끝 문턱 — 이번 변경과 닿지 않음, 다시 돌리지 않았다)
+  - 다음: B-4 `[BurstCompile]` 2 단계 (HPC# 잡 IL → C++ 네이티브)
+  - 다른 담당자: ScriptCore (Engine/Jobs · Mesh.cs · Components · Core, Interop/Bridge · NativeApi), Source/Scripting/ScriptBindings.cpp, Tools/tests/run_tests.ps1
+- 이전: 2026년 10월 21일 — **C# 고성능 경로 B-3: `[BurstCompile]` 1 단계** (같은 지시, 순서대로)
   - C# Code Optimization (Unity Code Optimization): `BuildSettings::Player::ScriptDebugBuild` (PlayerSettings.json `scriptOptimization`, Release 기본), `ScriptEngine` 이 `-c Release|Debug` 로 (게임 스크립트 · nova exec, 지문에 구성 · 분석기 시각), `SetDebugBuild` · `BuildReleaseAssembly` (개발 빌드가 아닌 플레이어는 Debug 여도 Release 로 — `BuildPipeline`), Project Settings > Player > Configuration, CLI `scripting info|set --optimization` (`CliCommands` · nova main.cpp)
   - `Tools/NovaBurstAnalyzer` (Roslyn 4.14 분석기, CMake 대상 → Binaries/Scripting/Analyzers): [BurstCompile] 잡 Execute · 정적 [BurstCompile] 메서드에서 부르는 메서드까지 NB1001 ~ NB1010 (관리 객체 · 관리 배열 · 박싱 · 델리게이트 · 정적 필드 · try/catch · 관리 형식 · 문자열 · lock · 관리 필드), Debug.Log · throw 안은 허락, 특성 인자 제외. Assembly-CSharp.csproj 에 `<Analyzer>`
   - C#: `ScriptCore/Engine/Burst.cs` (BurstCompile · BurstDiscard · NoAlias · BurstCompiler · FunctionPointer · SharedStatic · CompilerServices), 잡 실행 함수 · Run 에 AggressiveOptimization, Profiler 이름 "(Burst)"
   - 결과: Release 가 Debug 보다 약 8 배 (잡 Run 120 → 15 ms, float3 고리 10.4 → 1.24 ms, Schedule 2.9 ms). B-1 벤치 116 → 4.3 ms, 보이드 Run 118 → 21 ms
   - 문서 `docs/BURST.md`, NOVA_CLI · 로드맵 · MATHEMATICS_COLLECTIONS · CSHARP_JOBS 갱신
   - 검사: burst 6/6, 회귀 behaviour · scriptable · ui · mathcollections · csjobs 43/43
-  - 다음: B-5 엔진과 잇기 (IJobParallelForTransform · TransformAccessArray, RaycastCommand, MeshData), 그다음 B-4 네이티브 컴파일
   - 다른 담당자: Source/Build (BuildSettings · BuildPipeline), Source/Scripting/ScriptEngine, Source/Editor (CliCommands · ProjectSettingsWindow), Tools/NovaCli/main.cpp, CMakeLists.txt (NovaBurstAnalyzer 대상), 새 Tools/NovaBurstAnalyzer, ScriptCore/Engine (Burst.cs · Jobs)
 - 이전: 2026년 10월 21일 — **C# 고성능 경로 B-2: C# Job System** (같은 지시, 순서대로)
   - `ScriptCore/Engine/Jobs/` (NovaEngine.Jobs): `Jobs.cs` (IJob · IJobFor · IJobParallelFor · IJobParallelForBatch, JobHandle, 예약 확장 · Run, DisposeJob, JobsUtility), `JobScheduler.cs` (C# 전용 작업 스레드 코어 - 1 — 엔진 Job System 은 파이버라 CLR 불가, 기록 풀 · 표 · 의존성 · 컨테이너 잠금 · 충돌 검사 · Complete 돕기 · CompleteAll · 예외 → Console), `JobReflection.cs` (잡 형식마다 컨테이너 필드의 m_Safety 위치를 표시 값으로 찾기, 묶음 범위 좁히기, DeallocateOnJobCompletion)

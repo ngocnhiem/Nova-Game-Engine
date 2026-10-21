@@ -64,6 +64,16 @@ public class Swarm : MonoBehaviour
 - Play 를 멈추면 도는 잡을 기다리고 모든 잠금을 푼 뒤 남은 메모리를 알린다 ([누수 알림](MATHEMATICS_COLLECTIONS.md#안전-검사-에디터)). 스크립트를 다시 읽을 때도 먼저 모든 잡을 끝낸다
 - 플레이어 빌드 (`CollectionChecks.Enabled` = false) 는 검사 없이 돈다 — 잠금 기록 · 핸들 바꾸기를 하지 않는다
 
+## 엔진과 잇기
+
+| | Unity 이름 | NOVA 동작 |
+|---|---|---|
+| **Transform 잡** | `IJobParallelForTransform` · `TransformAccessArray` · `TransformAccess` (position · rotation · localPosition · localRotation · localScale · lossyScale) · `Schedule` · `ScheduleReadOnly` · `Run` · `RunReadOnly` | 예약할 때 **메인 스레드가 값을 모으고** (`TR_Gather` — 엔진 Transform 은 메인만 만진다) 작업 스레드가 사본을 고친 뒤, **Complete 때 바뀐 값만 되쓴다** (`TR_Scatter` — 로컬 다음 월드). Complete 하지 않으면 다음 프레임 시작에. `dependsOn` 은 모으기 전에 Complete 된다. 한 잡에서 position 을 바꿔도 localPosition 은 되쓸 때까지 그대로 |
+| **묶음 레이캐스트** | `RaycastCommand` · `QueryParameters` · `ScheduleBatch(commands, results, minCommandsPerJob[, maxHits], dependsOn)` | dependsOn (명령을 채운 잡) 을 Complete 한 뒤 렌더링과 겹친 물리 스텝을 끝내고 **엔진 Job System (네이티브) 으로 나눠 쏜다** — 돌려준 핸들은 이미 끝난 것, 결과를 읽는 잡은 그대로 이어 예약. `maxHits` > 1 은 가까운 순 · 남은 칸 비움, 잡 안에서는 `hit.colliderInstanceID` (0 = 맞지 않음) |
+| **메시** | `Mesh.AllocateWritableMeshData` · `MeshData.GetVertexData<T>` · `ApplyAndDisposeWritableMeshData` · `AcquireReadOnlyMeshData` | [C# Mesh API](CSHARP_MESH.md) — 잡에서 정점 · 색인 버퍼를 채우고 메인에서 적용 |
+
+재 보기 (에디터): Transform 2000 개를 움직이고 돌리기 — 메인 스레드 `transform.position = …` 고리 8.4 ms, `IJobParallelForTransform` 4.5 ms (모으기 · 되쓰기 포함). 레이캐스트 1600 발 + 채우기 잡 + 세기 잡 한 번에.
+
 ## 엔진 안
 
 - `ScriptCore/Engine/Jobs/` — `Jobs.cs` (인터페이스 · `JobHandle` · 예약 확장 · `JobsUtility`), `JobScheduler.cs` (작업 스레드, 잡 기록 풀, 의존성, 잠금), `JobReflection.cs` (잡 형식마다 한 번: 안의 컨테이너 필드 (중첩 struct 까지) 의 `m_Safety` 위치를 찾고 특성을 읽는다)
@@ -81,6 +91,7 @@ public class Swarm : MonoBehaviour
 
 ## 아직
 
-- B-5: `IJobParallelForTransform` · `RaycastCommand`, B-4: 네이티브 컴파일 (B-3 `[BurstCompile]` 1 단계는 [BURST](BURST.md))
+- B-4: 네이티브 컴파일 (B-3 `[BurstCompile]` 1 단계는 [BURST](BURST.md))
+- `SpherecastCommand` · `OverlapSphereCommand` · `BoxcastCommand`, 레이캐스트를 작업 스레드에서 (지금은 메인이 네이티브 병렬로 — 물리 스텝과 겹치지 않게), Transform 잡이 도는 동안 메인의 Transform 읽기를 기다리게 (Unity 는 맞춘다)
 - `IJobParallelForDefer` (NativeList 길이로 나중에), `[NativeSetThreadIndex]`, `JobHandle.ScheduleBatchedJobs` 묶어 늦추기 (지금은 예약 즉시 시작)
 - 엔진 Job System 과 작업자 공유 (지금은 C# 작업자가 따로 — 둘 다 바쁘면 코어를 나눠 쓴다)

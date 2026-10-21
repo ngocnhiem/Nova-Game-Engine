@@ -323,6 +323,23 @@ namespace NovaEngine.Interop
         public delegate* unmanaged<byte*, long*, ushort*, int> Prof_Begin;     // Profiler: 0 꺼짐, 1 메인 스레드, 2 다른 스레드 (시작 시각 · 깊이를 돌려줌)
         public delegate* unmanaged<int, byte*, long, ushort, void> Prof_End;
         public delegate* unmanaged<byte*, void> Prof_SetThreadName;
+        // C# Job System 과 엔진: TransformAccessArray 모으기 · 되쓰기, RaycastCommand 묶음, C# Mesh (ScriptBindings.cpp 주석의 번호)
+        public delegate* unmanaged<ulong*, int, NovaEngine.Jobs.TransformAccessData*, int> TR_Gather;
+        public delegate* unmanaged<ulong*, int, NovaEngine.Jobs.TransformAccessData*, int> TR_Scatter;
+        public delegate* unmanaged<RaycastCommand*, int, RaycastHit*, int, int> PH_RaycastBatch;
+        public delegate* unmanaged<int> MESH_Create;
+        public delegate* unmanaged<int, void> MESH_Release;
+        public delegate* unmanaged<ulong, int> MESH_FromFilter;
+        public delegate* unmanaged<ulong, int, int> MESH_SetToFilter;
+        public delegate* unmanaged<int, int, int> MESH_GetInt;              // 0 vertexCount, 1 index count, 2 subMeshCount
+        public delegate* unmanaged<int, byte*> MESH_GetName;
+        public delegate* unmanaged<int, byte*, void> MESH_SetName;
+        public delegate* unmanaged<int, int, float*, int, int, int, int> MESH_SetAttr;   // attr 0 position, 1 normal, 2 uv0, 3 tangent · count · dim · stride
+        public delegate* unmanaged<int, int, float*, int, int, int> MESH_GetAttr;
+        public delegate* unmanaged<int, void*, int, int, int> MESH_SetIndices;      // is16
+        public delegate* unmanaged<int, int*, int, int> MESH_GetIndices;
+        public delegate* unmanaged<int, int, void> MESH_Op;                  // 0 RecalculateNormals, 1 Bounds, 2 Tangents, 3 Clear, 4 지금 올리기
+        public delegate* unmanaged<int, Vector3*, Vector3*, void> MESH_Bounds;
     }
 
     internal static unsafe class Native

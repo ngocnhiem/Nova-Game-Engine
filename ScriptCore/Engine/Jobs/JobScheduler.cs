@@ -29,6 +29,8 @@ namespace NovaEngine.Jobs
         internal void* Data;                                  // 잡 struct 사본 (비관리 메모리)
         internal delegate*<JobRecord, int, int, void> Exec;   // JobProducer<T>.Execute
         internal delegate*<JobRecord, void> Finish;           // [DeallocateOnJobCompletion]
+        internal delegate*<IntPtr, void> OnSync;              // Complete 때 메인 스레드에서 (TransformAccessArray 되쓰기)
+        internal IntPtr OnSyncArg;
         internal int Length, Batch, Next, Done, Tickets;
         internal int Outstanding;          // 아직 큐에서 안 나왔거나 도는 중인 표 — 0 이 되기 전엔 되쓰지 않는다
         internal bool RecyclePending;
@@ -226,6 +228,8 @@ namespace NovaEngine.Jobs
             r.RecyclePending = false;
             r.Restrict = false;
             r.Finish = null;
+            r.OnSync = null;
+            r.OnSyncArg = IntPtr.Zero;
             s_LiveRecords++;
             return r;
         }
@@ -494,7 +498,35 @@ namespace NovaEngine.Jobs
             if (r == null) return;
             WaitFor(r);
             lock (s_Lock) { if (r.Version == h.m_Version) Sync(r); }
+            RunSyncCallbacks();
             FlushErrors();
+        }
+
+        // Complete 뒤 메인 스레드 일 (잠금 밖에서 — 엔진 API 를 부른다)
+        struct SyncCallback { public delegate*<IntPtr, void> Fn; public IntPtr Arg; }
+        static readonly List<SyncCallback> s_SyncCallbacks = new List<SyncCallback>();
+        static void RunSyncCallbacks()
+        {
+            if (s_SyncCallbacks.Count == 0) return;
+            SyncCallback[] list;
+            lock (s_Lock) { list = s_SyncCallbacks.ToArray(); s_SyncCallbacks.Clear(); }
+            foreach (SyncCallback c in list)
+            {
+                try { c.Fn(c.Arg); }
+                catch (Exception e) { Bridge.LogException(e); }
+            }
+        }
+
+        /// <summary>잡이 Complete 될 때 (메인 스레드) 부를 함수 — 예약 직후, 아직 기다리기 전에</summary>
+        internal static void SetSyncCallback(JobHandle h, delegate*<IntPtr, void> fn, IntPtr arg)
+        {
+            lock (s_Lock)
+            {
+                JobRecord r = Get(h);
+                if (r == null || r.Synced) { s_SyncCallbacks.Add(new SyncCallback { Fn = fn, Arg = arg }); }
+                else { r.OnSync = fn; r.OnSyncArg = arg; }
+            }
+            if (Get(h) == null) RunSyncCallbacks();
         }
 
         // 끝날 때까지 큐의 다른 잡을 돕는다 (Sleep(1) 없이 — Windows 는 15 ms 가 될 수 있다)
@@ -521,6 +553,7 @@ namespace NovaEngine.Jobs
                 if (x.Synced || x.State != JobRecord.kFinished) continue;
                 x.Synced = true;
                 ReleaseLocks(x);
+                if (x.OnSync != null) { s_SyncCallbacks.Add(new SyncCallback { Fn = x.OnSync, Arg = x.OnSyncArg }); x.OnSync = null; }
                 for (int i = 0; i < x.DepCount; i++) { JobRecord d = Get(x.Deps[i]); if (d != null) todo.Push(d); }
                 done.Add(x);
             }
@@ -555,6 +588,7 @@ namespace NovaEngine.Jobs
                 WaitFor(pending);
             }
             while (s_Queue.TryDequeue(out long item)) RunTicket(item, false);   // 끝난 잡의 남은 표 (되쓰기를 마저)
+            RunSyncCallbacks();
             FlushErrors();
         }
 

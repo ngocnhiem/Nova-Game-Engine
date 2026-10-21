@@ -21,6 +21,10 @@ namespace NovaEngine.Jobs
         public JobReflectionUtil.RefAction Dispose;
     }
 
+    /// <summary>엔진이 사용자 잡을 감싼 struct (첫 형식 인자 = 사용자 잡, 필드 이름 Job)</summary>
+    [AttributeUsage(AttributeTargets.Struct)]
+    internal sealed class JobWrapperAttribute : Attribute { }
+
     internal static unsafe class JobReflectionUtil
     {
         internal delegate void RefAction(ref byte container);
@@ -46,6 +50,7 @@ namespace NovaEngine.Jobs
         internal static string NiceName(Type t)
         {
             if (s_Keywords.TryGetValue(t, out string kw)) return kw;
+            if (t.IsGenericType && t.IsDefined(typeof(JobWrapperAttribute), false)) return NiceName(t.GetGenericArguments()[0]);
             Type[] all = t.IsGenericType ? t.GetGenericArguments() : Type.EmptyTypes;
             if (t.IsNested && !t.IsGenericParameter)
             {
@@ -170,8 +175,10 @@ namespace NovaEngine.Jobs
                     Type ct = last.FieldType;
                     int off = JobReflectionUtil.Find(ref start, size, sentinels[k]);
                     if (off < 0) continue;
-                    var names = new string[path.Length];
-                    for (int i = 0; i < path.Length; i++) names[i] = path[i].Name;
+                    var nameList = new List<string>();
+                    foreach (FieldInfo pf in path)
+                        if (!(pf.Name == "Job" && pf.DeclaringType.IsDefined(typeof(JobWrapperAttribute), false))) nameList.Add(pf.Name);   // 래퍼의 Job 필드는 빼고
+                    string[] names = nameList.ToArray();
                     var f = new ContainerField
                     {
                         Name = Name + "." + string.Join(".", names),

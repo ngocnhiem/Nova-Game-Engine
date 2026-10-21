@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'burst', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'burst', 'enginejobs', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -7806,6 +7806,408 @@ public static class BurstTest
     finally { Stop-TestEditor $ed | Out-Null }
 }
 
+# C# 고성능 경로 B-5: 잡과 엔진 — IJobParallelForTransform · TransformAccessArray (모으기 · 되쓰기), RaycastCommand (네이티브 병렬 묶음),
+#  C# Mesh (new Mesh · SetVertices · MeshFilter.mesh · Mesh.MeshData 잡에서 쓰기 · 읽기)
+function Suite-EngineJobs
+{
+    Write-Host '[enginejobs]'
+    if (-not ('NovaRedFraction' -as [type]))
+    {
+        Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+using System; using System.Drawing; using System.Drawing.Imaging; using System.Runtime.InteropServices;
+public static class NovaRedFraction
+{
+    public static double Of(string path, double x0, double y0, double x1, double y1)
+    {
+        using (var bmp = new Bitmap(path))
+        {
+            int w = bmp.Width, h = bmp.Height;
+            var d = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var b = new byte[d.Stride * h];
+            Marshal.Copy(d.Scan0, b, 0, b.Length);
+            bmp.UnlockBits(d);
+            int n = 0, red = 0;
+            for (int y = (int)(y0 * h); y < (int)(y1 * h); y++)
+                for (int x = (int)(x0 * w); x < (int)(x1 * w); x++)
+                {
+                    int i = y * d.Stride + x * 4;
+                    n++;
+                    if (b[i + 2] > b[i + 1] + 60 && b[i + 2] > b[i] + 60) red++;
+                }
+            return n == 0 ? 0 : (double)red / n;
+        }
+    }
+}
+"@
+    }
+    $dir = Join-Path $Project 'Assets\EngineJobTest'
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using NovaEngine;
+using NovaEngine.Burst;
+using NovaEngine.Collections;
+using NovaEngine.Jobs;
+using NovaEngine.Mathematics;
+using NovaEngine.Rendering;
+
+[BurstCompile]
+public struct EJMove : IJobParallelForTransform
+{
+    public float dy;
+    public Quaternion spin;
+    public void Execute(int index, TransformAccess t)
+    {
+        t.position = t.position + new Vector3(0, dy * (index % 7), 0);
+        t.rotation = spin * t.rotation;
+    }
+}
+
+[BurstCompile]
+public struct EJRead : IJobParallelForTransform
+{
+    public NativeArray<float3> positions;
+    public void Execute(int index, TransformAccess t) => positions[index] = t.position;
+}
+
+[BurstCompile]
+public struct EJPlace : IJobParallelForTransform
+{
+    public Vector3 target;
+    public void Execute(int index, TransformAccess t) => t.position = target;
+}
+
+[BurstCompile]
+public struct EJFillRays : IJobParallelFor
+{
+    public NativeArray<RaycastCommand> commands;
+    public int side;
+    public float spacing;
+    public int mask;
+    public void Execute(int i)
+    {
+        float x = (i % side - side / 2) * spacing, z = (i / side - side / 2) * spacing;
+        commands[i] = new RaycastCommand(new Vector3(x, 20f, z), Vector3.down, new QueryParameters(mask), 100f);
+    }
+}
+
+[BurstCompile]
+public struct EJCountHits : IJob
+{
+    [ReadOnly] public NativeArray<RaycastHit> hits;
+    public NativeReference<int> count;
+    public NativeReference<float> maxDistance;
+    public void Execute()
+    {
+        int c = 0; float m = 0f;
+        for (int i = 0; i < hits.Length; i++) if (hits[i].colliderInstanceID != 0) { c++; m = math.max(m, hits[i].distance); }
+        count.Value = c; maxDistance.Value = m;
+    }
+}
+
+public struct EJVertex { public float3 pos; public float3 normal; public float2 uv; }
+
+[BurstCompile]
+public struct EJGrid : IJob
+{
+    public Mesh.MeshDataArray data;
+    public int n;
+    public float size;
+    public void Execute()
+    {
+        Mesh.MeshData md = data[0];
+        NativeArray<EJVertex> v = md.GetVertexData<EJVertex>();
+        NativeArray<ushort> idx = md.GetIndexData<ushort>();
+        for (int z = 0; z <= n; z++)
+            for (int x = 0; x <= n; x++)
+                v[z * (n + 1) + x] = new EJVertex { pos = new float3(x * size / n - size / 2, math.sin(x * 0.5f) * 0.3f, z * size / n - size / 2), normal = math.up(), uv = new float2((float)x / n, (float)z / n) };
+        int k = 0;
+        for (int z = 0; z < n; z++)
+            for (int x = 0; x < n; x++)
+            {
+                int a = z * (n + 1) + x, b = a + 1, c = a + n + 1, d = c + 1;
+                idx[k++] = (ushort)a; idx[k++] = (ushort)c; idx[k++] = (ushort)b;
+                idx[k++] = (ushort)b; idx[k++] = (ushort)c; idx[k++] = (ushort)d;
+            }
+        md.subMeshCount = 1;
+        md.SetSubMesh(0, new SubMeshDescriptor(0, k));
+    }
+}
+
+[BurstCompile]
+public struct EJReadMesh : IJob
+{
+    [ReadOnly] public Mesh.MeshDataArray data;
+    public NativeArray<Vector3> vertices;
+    public NativeReference<int> indexCount;
+    public void Execute()
+    {
+        Mesh.MeshData md = data[0];
+        md.GetVertices(vertices);
+        indexCount.Value = md.GetSubMesh(0).indexCount;
+    }
+}
+
+public static class EJTest
+{
+    static List<string> s_Fail;
+    static void Check(bool ok, string what) { if (!ok) s_Fail.Add(what); }
+    static bool Near(Vector3 a, Vector3 b, float e = 1e-3f) => (a - b).magnitude <= e;
+    static string Catch(Action a) { try { a(); return "none"; } catch (Exception e) { return e.GetType().Name + ": " + e.Message; } }
+    static string Result(string name) => s_Fail.Count == 0 ? name + ":ok" : name + ":" + string.Join(" | ", s_Fail);
+
+    static List<GameObject> s_Cubes = new List<GameObject>();
+    static TransformAccessArray s_Array;
+    static Vector3[] s_Before;
+
+    public static string Spawn(int n)
+    {
+        s_Cubes.Clear();
+        for (int i = 0; i < n; i++)
+        {
+            var g = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            g.name = "EJCube" + i;
+            g.transform.position = new Vector3(i % 20, 0.5f, i / 20);
+            s_Cubes.Add(g);
+        }
+        return s_Cubes.Count.ToString();
+    }
+
+    public static string Transforms()
+    {
+        s_Fail = new List<string>();
+        var ts = new Transform[s_Cubes.Count];
+        for (int i = 0; i < ts.Length; i++) ts[i] = s_Cubes[i].transform;
+        var arr = new TransformAccessArray(ts);
+        Check(arr.length == ts.Length && arr[5].gameObject.name == "EJCube5", "TransformAccessArray length / indexer");
+        var before = new Vector3[ts.Length];
+        for (int i = 0; i < ts.Length; i++) before[i] = ts[i].position;
+        Quaternion spin = Quaternion.Euler(0, 30, 0);
+        JobHandle h = new EJMove { dy = 0.25f, spin = spin }.Schedule(arr);
+        string second = Catch(() => new EJMove { dy = 1f, spin = spin }.Schedule(arr));
+        Check(second.Contains("JobHandle.Complete()"), "second transform job before Complete: " + second);
+        h.Complete();
+        bool moved = true;
+        for (int i = 0; i < ts.Length; i++) moved &= Near(ts[i].position, before[i] + new Vector3(0, 0.25f * (i % 7), 0)) && Quaternion.Angle(ts[i].rotation, spin) < 0.1f;
+        Check(moved, "IJobParallelForTransform wrote positions and rotations back on Complete");
+        var read = new NativeArray<float3>(ts.Length, Allocator.TempJob);
+        new EJRead { positions = read }.ScheduleReadOnly(arr, 32).Complete();
+        bool same = true; for (int i = 0; i < ts.Length; i++) same &= Near(read[i], ts[i].position);
+        Check(same, "ScheduleReadOnly reads the current positions");
+        read.Dispose();
+        // 부모 아래 자식: 월드 위치로 (되쓸 때 엔진이 로컬로 바꾼다)
+        var parent = new GameObject("EJParent");
+        parent.transform.position = new Vector3(10, 0, 0);
+        parent.transform.rotation = Quaternion.Euler(0, 90, 0);
+        var child = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        child.transform.SetParent(parent.transform, false);
+        var one = new TransformAccessArray(new[] { child.transform });
+        new EJPlace { target = new Vector3(3, 4, 5) }.Schedule(one).Complete();
+        Check(Near(child.transform.position, new Vector3(3, 4, 5)), "child world position (" + child.transform.position + ")");
+        one.Dispose();
+        // Run (지금 여기)
+        new EJMove { dy = 0f, spin = Quaternion.identity }.Run(arr);
+        arr.RemoveAtSwapBack(0);
+        Check(arr.length == ts.Length - 1 && arr[0].gameObject.name == "EJCube" + (ts.Length - 1), "RemoveAtSwapBack");
+        arr.Dispose();
+        // Complete 하지 않은 잡도 다음 프레임 시작에 되쓴다
+        s_Array = new TransformAccessArray(ts);
+        s_Before = new Vector3[ts.Length];
+        for (int i = 0; i < ts.Length; i++) s_Before[i] = ts[i].position;
+        new EJMove { dy = 1f, spin = Quaternion.identity }.Schedule(s_Array);
+        return Result("transforms");
+    }
+
+    public static string NextFrame()
+    {
+        bool moved = true;
+        for (int i = 0; i < s_Cubes.Count; i++) moved &= Near(s_Cubes[i].transform.position, s_Before[i] + new Vector3(0, i % 7, 0));
+        s_Array.Dispose();
+        return moved ? "applied" : "not applied";
+    }
+
+    public static string Floor()
+    {
+        var floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        floor.name = "EJFloor";
+        floor.transform.position = new Vector3(0, -0.5f, 0);
+        floor.transform.localScale = new Vector3(60, 1, 60);
+        var box = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        box.name = "EJBox";
+        box.transform.position = new Vector3(0, 1, 0);
+        box.transform.localScale = new Vector3(4, 2, 4);
+        foreach (var g in s_Cubes) GameObject.Destroy(g);
+        s_Cubes.Clear();
+        return "ok";
+    }
+
+    public static string Rays()
+    {
+        s_Fail = new List<string>();
+        const int side = 40;
+        int n = side * side;
+        var cmds = new NativeArray<RaycastCommand>(n, Allocator.TempJob);
+        var hits = new NativeArray<RaycastHit>(n, Allocator.TempJob);
+        var count = new NativeReference<int>(Allocator.TempJob);
+        var maxD = new NativeReference<float>(Allocator.TempJob);
+        JobHandle fill = new EJFillRays { commands = cmds, side = side, spacing = 1f, mask = -5 }.Schedule(n, 64);
+        JobHandle cast = RaycastCommand.ScheduleBatch(cmds, hits, 32, fill);
+        new EJCountHits { hits = hits, count = count, maxDistance = maxD }.Schedule(cast).Complete();
+        Check(count.Value == n, "all " + n + " rays hit (" + count.Value + ")");
+        Check(System.Math.Abs(maxD.Value - 20f) < 0.05f, "floor distance 20 (" + maxD.Value + ")");
+        RaycastHit center = hits[side / 2 * side + side / 2];
+        Check(center.collider != null && center.collider.gameObject.name == "EJBox" && System.Math.Abs(center.distance - 18f) < 0.05f, "center ray hits the box top first (" + (center.collider != null ? center.collider.gameObject.name : "none") + ", " + center.distance + ")");
+        // 레이어 마스크: Default (0) 를 빼면 아무것도
+        new EJFillRays { commands = cmds, side = side, spacing = 1f, mask = ~1 }.Schedule(n, 64).Complete();
+        RaycastCommand.ScheduleBatch(cmds, hits, 32).Complete();
+        int masked = 0; for (int i = 0; i < n; i++) if (hits[i].colliderInstanceID != 0) masked++;
+        Check(masked == 0, "layer mask without Default hits nothing (" + masked + ")");
+        // maxHits 2: 상자 안 광선은 상자 · 바닥 두 번 (가까운 순)
+        new EJFillRays { commands = cmds, side = side, spacing = 1f, mask = -5 }.Schedule(n, 64).Complete();
+        var hits2 = new NativeArray<RaycastHit>(n * 2, Allocator.TempJob);
+        RaycastCommand.ScheduleBatch(cmds, hits2, 32, 2).Complete();
+        int c2 = side / 2 * side + side / 2;
+        Check(hits2[c2 * 2].colliderInstanceID != 0 && hits2[c2 * 2 + 1].colliderInstanceID != 0 && hits2[c2 * 2].distance < hits2[c2 * 2 + 1].distance && hits2[1].colliderInstanceID == 0, "maxHits 2 (box then floor; outside: one)");
+        string small = Catch(() => RaycastCommand.ScheduleBatch(cmds, hits, 32, 2));
+        Check(small.StartsWith("ArgumentException"), "results too small: " + small);
+        foreach (var d in new IDisposable[] { cmds, hits, hits2, count, maxD }) d.Dispose();
+        return Result("rays");
+    }
+
+    public static string Meshes()
+    {
+        s_Fail = new List<string>();
+        var quad = new Mesh();
+        quad.name = "EJQuad";
+        quad.vertices = new[] { new Vector3(0, 0, 0), new Vector3(0, 1, 0), new Vector3(1, 1, 0), new Vector3(1, 0, 0) };
+        quad.uv = new[] { new Vector2(0, 0), new Vector2(0, 1), new Vector2(1, 1), new Vector2(1, 0) };
+        quad.triangles = new[] { 0, 1, 2, 0, 2, 3 };
+        quad.RecalculateNormals();
+        Vector3[] nrm = quad.normals;
+        Check(quad.vertexCount == 4 && quad.triangles.Length == 6 && Near(nrm[0], new Vector3(0, 0, -1)), "new Mesh: vertices, triangles, RecalculateNormals (" + nrm[0] + ")");
+        Check(Near(quad.bounds.center, new Vector3(0.5f, 0.5f, 0)) && Near(quad.bounds.size, new Vector3(1, 1, 0)), "bounds " + quad.bounds);
+        string bad = Catch(() => quad.triangles = new[] { 0, 1, 9 });
+        Check(bad.StartsWith("ArgumentException"), "triangle index out of range: " + bad);
+        quad.triangles = new[] { 0, 1, 2, 0, 2, 3 };
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        go.name = "EJMeshObject";
+        var mf = go.GetComponent<MeshFilter>();
+        int cubeVerts = mf.sharedMesh.vertexCount;
+        Mesh inst = mf.mesh;
+        Check(inst != null && inst.vertexCount == cubeVerts && inst == mf.sharedMesh, "MeshFilter.mesh makes an instance (" + cubeVerts + " vertices)");
+        mf.sharedMesh = quad;
+        Check(mf.sharedMesh == quad && mf.sharedMesh.vertexCount == 4, "MeshFilter.sharedMesh = new mesh");
+
+        // MeshData: 메인에서 크기, 잡에서 채우기, 적용
+        const int N = 32;
+        var data = Mesh.AllocateWritableMeshData(1);
+        var md = data[0];
+        md.SetVertexBufferParams((N + 1) * (N + 1),
+            new VertexAttributeDescriptor(VertexAttribute.Position),
+            new VertexAttributeDescriptor(VertexAttribute.Normal),
+            new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2));
+        md.SetIndexBufferParams(N * N * 6, IndexFormat.UInt16);
+        new EJGrid { data = data, n = N, size = 8f }.Schedule().Complete();
+        var grid = new Mesh();
+        Mesh.ApplyAndDisposeWritableMeshData(data, grid);
+        Check(grid.vertexCount == (N + 1) * (N + 1) && grid.triangles.Length == N * N * 6 && System.Math.Abs(grid.bounds.size.x - 8f) < 0.01f, "MeshData written in a job → ApplyAndDisposeWritableMeshData (" + grid.vertexCount + " vertices, " + grid.triangles.Length + " indices)");
+        var gridGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        gridGo.name = "EJGrid";
+        gridGo.transform.position = new Vector3(0, 0.5f, 6);
+        gridGo.GetComponent<MeshFilter>().sharedMesh = grid;
+
+        // 읽기 전용 MeshData 를 잡에서
+        var ro = Mesh.AcquireReadOnlyMeshData(grid);
+        var verts = new NativeArray<Vector3>(grid.vertexCount, Allocator.TempJob);
+        var ic = new NativeReference<int>(Allocator.TempJob);
+        new EJReadMesh { data = ro, vertices = verts, indexCount = ic }.Schedule().Complete();
+        Check(Near(verts[0], new Vector3(-4, 0, -4)) && ic.Value == N * N * 6, "AcquireReadOnlyMeshData read in a job (" + verts[0] + ", " + ic.Value + ")");
+        string write = Catch(() => ro[0].SetIndexBufferParams(3, IndexFormat.UInt16));
+        Check(write.Contains("read-only"), "read-only MeshData rejects writes: " + write);
+        ro.Dispose(); verts.Dispose(); ic.Dispose();
+        var nv = new NativeArray<float3>(3, Allocator.Temp);
+        nv[0] = new float3(0, 0, 0); nv[1] = new float3(0, 1, 0); nv[2] = new float3(1, 0, 0);
+        var tri = new Mesh();
+        tri.SetVertices(nv);
+        tri.SetTriangles(new[] { 0, 1, 2 }, 0);
+        Check(tri.vertexCount == 3 && Near(tri.vertices[1], new Vector3(0, 1, 0)), "SetVertices(NativeArray<float3>)");
+        GameObject.Destroy(tri);
+        Check(tri == null, "Destroy(mesh)");
+        return Result("meshes");
+    }
+
+    public static string Bench()
+    {
+        const int N = 2000;
+        var objs = new Transform[N];
+        for (int i = 0; i < N; i++) { var g = new GameObject("EJBench" + i); objs[i] = g.transform; }
+        var arr = new TransformAccessArray(objs);
+        var job = new EJMove { dy = 0.001f, spin = Quaternion.Euler(0, 1, 0) };
+        job.Schedule(arr).Complete();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int k = 0; k < 5; k++) job.Schedule(arr).Complete();
+        double jobs = sw.Elapsed.TotalMilliseconds / 5;
+        sw.Restart();
+        for (int k = 0; k < 5; k++)
+            for (int i = 0; i < N; i++) { var t = objs[i]; t.position = t.position + new Vector3(0, 0.001f * (i % 7), 0); t.rotation = job.spin * t.rotation; }
+        double main = sw.Elapsed.TotalMilliseconds / 5;
+        arr.Dispose();
+        foreach (var t in objs) GameObject.Destroy(t.gameObject);
+        return string.Format(CultureInfo.InvariantCulture, "{0:F2}|{1:F2}", jobs, main);
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $dir 'EngineJobTests.cs')
+    $cs = Join-Path $Out 'enginejobs.cs'
+    function Exec([string]$code) { $code | Set-Content -Encoding utf8 $cs; "$((Invoke-NovaJson "exec --file $cs").result)" }
+    $ed = Start-TestEditor
+    try
+    {
+        Wait-Compile
+        Invoke-Nova 'scene new --force' | Out-Null
+        # 화면 확인용: 검은 바닥 · 내려다보는 카메라 (Play 전에 — Play 중 CLI set 은 런타임 카메라에 닿지 않는다)
+        Invoke-Nova 'create cube --name EJGround --position 0,-0.5,4 --scale 30,1,30' | Out-Null
+        Invoke-Nova 'set EJGround --component MeshRenderer --values "{\"m_MaterialPaths\":[\"Assets/FogTest/Black.mat\"]}"' | Out-Null
+        Invoke-Nova 'set "Main Camera" --position 0,4.2,-2.2 --rotation 38,0,0' | Out-Null
+        Invoke-Nova 'play' | Out-Null
+        Invoke-Nova 'wait 5' | Out-Null
+        $n = Exec 'return EJTest.Spawn(200);'
+        Invoke-Nova 'wait 3' | Out-Null
+        $t = Exec 'return EJTest.Transforms();'
+        Add-Result enginejobs 'IJobParallelForTransform: writes back on Complete, ScheduleReadOnly, child world position, Run, RemoveAtSwapBack, second job before Complete refused' ($t -eq 'transforms:ok') ("{0} cubes: {1}" -f $n, $t)
+        Invoke-Nova 'wait 2' | Out-Null
+        $nf = Exec 'return EJTest.NextFrame();'
+        Add-Result enginejobs 'a transform job that is never completed is applied at the next frame' ($nf -eq 'applied') $nf
+        Exec 'return EJTest.Floor();' | Out-Null
+        Invoke-Nova 'wait 5' | Out-Null
+        $r = Exec 'return EJTest.Rays();'
+        Add-Result enginejobs 'RaycastCommand: job fills 1600 commands → ScheduleBatch (native parallel) → job counts hits; box before floor; layer mask; maxHits 2' ($r -eq 'rays:ok') $r
+        $m = Exec 'return EJTest.Meshes();'
+        Add-Result enginejobs 'C# Mesh: new Mesh · RecalculateNormals · bounds · MeshFilter.mesh instance · MeshData written in a job · read-only MeshData in a job · NativeArray vertices · Destroy' ($m -eq 'meshes:ok') $m
+        $place = @'
+var grid = GameObject.Find("EJGrid");
+grid.transform.position = new Vector3(0, 0.6f, 4);
+grid.GetComponent<MeshRenderer>().sharedMaterial = Material.Load("Assets/SsgiTest/Red.mat");
+GameObject.Find("EJBox").SetActive(false);
+GameObject.Find("EJFloor").SetActive(false);
+return "placed";
+'@
+        Exec $place | Out-Null
+        Invoke-Nova 'window game' | Out-Null
+        Invoke-Nova 'wait 20' | Out-Null
+        $shot = Join-Path $Out 'enginejobs_mesh.png'
+        Invoke-Nova ('screenshot "' + $shot + '" --view game') | Out-Null
+        $red = if (Test-Path $shot) { [NovaRedFraction]::Of($shot, 0.2, 0.25, 0.8, 0.8) } else { 0 }
+        Add-Result enginejobs 'the job-built grid mesh renders (red material fills the middle of the view)' ($red -gt 0.4) ("red pixels {0:P0} of the middle region" -f $red)
+        $b = (Exec 'return EJTest.Bench();') -split '\|'
+        Add-Result enginejobs '2000 transforms: TransformAccessArray job vs main-thread Transform calls (information)' $true ("job {0} ms, main thread {1} ms" -f $b[0], $b[1])
+        Invoke-Nova 'stop' | Out-Null
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+}
+
 function Capture-Scenes([switch]$OpenGL, [switch]$Vulkan, [switch]$D3D12, [string]$dir)
 {
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -10441,6 +10843,7 @@ try
                 'mathcollections' { Suite-MathCollections }
                 'csjobs' { Suite-CsJobs }
                 'burst' { Suite-Burst }
+                'enginejobs' { Suite-EngineJobs }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }

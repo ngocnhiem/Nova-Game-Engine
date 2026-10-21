@@ -57,6 +57,7 @@ namespace NovaEngine
         {
             if (obj is null) return;
             if (obj is ScriptableObject so) { so.DestroyInternal(); return; }
+            if (obj is Mesh mesh) { mesh.DestroyInternal(); return; }
             if (obj is Joint2D joint) { joint.RemoveJoint(); return; }
             if (obj is MonoBehaviour mb) { mb.RequestDestroyComponent(); return; }
             if (obj is Component c && !(obj is Transform)) { c.RemoveNative(); return; }
@@ -81,6 +82,7 @@ namespace NovaEngine
         {
             if (original == null) throw new ArgumentException("The Object you want to instantiate is null.");
             if (original is ScriptableObject so) return ScriptableAssets.Clone(so);   // 데이터 에셋의 사본 (저장되지 않는다)
+            if (original is Mesh mesh) return mesh.CloneMesh();   // 메시 사본 (정점 · 삼각형)
             ulong id = Native.Api.GO_Instantiate(original.m_Id, hasPose ? 1 : 0, &pos, &rot, parent is null ? 0 : parent.m_Id);
             if (id == 0) return null;
             var go = new GameObject(id);
@@ -325,6 +327,7 @@ namespace NovaEngine
             if (t == typeof(Camera)) return "Camera";
             if (t == typeof(Light)) return "Light";
             if (t == typeof(MeshRenderer)) return "MeshRenderer";
+            if (t == typeof(MeshFilter)) return "MeshFilter";
             if (t == typeof(SkinnedMeshRenderer)) return "SkinnedMeshRenderer";
             if (t == typeof(SpriteRenderer)) return "SpriteRenderer";
             if (t == typeof(SpriteAnimator)) return "SpriteAnimator";

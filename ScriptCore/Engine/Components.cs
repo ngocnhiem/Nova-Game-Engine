@@ -526,6 +526,8 @@ namespace NovaEngine
         public Vector3 normal;
         public float distance;
         internal ulong m_GameObject;
+        /// <summary>맞은 콜라이더의 GameObject id (0 = 맞지 않음) — 잡 안에서 (RaycastCommand 결과)</summary>
+        public ulong colliderInstanceID => m_GameObject;
         public Collider collider => m_GameObject == 0 ? null : new Collider(m_GameObject);
         public Transform transform => m_GameObject == 0 ? null : new Transform(m_GameObject);
         public Rigidbody rigidbody => m_GameObject == 0 ? null : new GameObject(m_GameObject).GetComponent<Rigidbody>();
@@ -716,16 +718,4 @@ namespace NovaEngine
         public float speed { get => Native.Api.SA_GetSpeed(m_Id); set => Native.Api.SA_SetSpeed(m_Id, value); }
     }
 
-    /// <summary>Unity 의 Mesh 중 BlendShape 정보 (SkinnedMeshRenderer.sharedMesh)</summary>
-    public sealed class Mesh
-    {
-        private readonly ulong m_Owner;
-        internal Mesh(ulong owner) { m_Owner = owner; }
-        public unsafe int blendShapeCount => Native.Api.SMR_Count(m_Owner);
-        public unsafe string GetBlendShapeName(int index) => Native.Str(Native.Api.SMR_Name(m_Owner, index));
-        public unsafe int GetBlendShapeIndex(string name)
-        {
-            fixed (byte* p = Native.Utf8(name)) return Native.Api.SMR_Index(m_Owner, p);
-        }
-    }
 }

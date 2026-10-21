@@ -71,7 +71,9 @@ namespace NovaEngine.Interop
             FrameIndex++;
             try
             {
+                NovaEngine.Jobs.TransformJobs.CompletePending();   // Complete 하지 않은 Transform 잡도 프레임마다 되쓴다
                 NovaEngine.Jobs.JobScheduler.FlushErrors();   // 잡 안 예외 → Console
+                NovaEngine.Mesh.ReleaseCollected();           // 버려진 C# Mesh 의 네이티브 손잡이
                 NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.BeginFrame();   // Temp 되돌림 · TempJob 수명
             }
             catch (Exception e) { LogException(e); }
