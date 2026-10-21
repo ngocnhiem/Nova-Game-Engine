@@ -21,7 +21,7 @@ namespace
 		FxTechnique* t = fx ? fx->GetTechniqueByName(name) : nullptr;
 		return t && t->IsValid() ? t : nullptr;
 	}
-	const float kWhite[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	const float kWhite[4] = { 1.0f, 0.0f, 0.0f, 0.0f };   // AO 1 (가림 없음), gba = SSGI 간접광 0
 }
 
 Ssao::Settings Ssao::Settings::FromStack(const VolumeStack& stack)
@@ -348,7 +348,7 @@ void Ssao::BuildTextureViews()
 	MakeTarget(nd, _renderTargetWidth, _renderTargetHeight, DXGI_FORMAT_R16G16B16A16_FLOAT);
 	_normalDepthSRV = nd.SRV;
 	_normalDepthRTV = nd.RTV;
-	MakeTarget(full, _renderTargetWidth, _renderTargetHeight, DXGI_FORMAT_R16_FLOAT);
+	MakeTarget(full, _renderTargetWidth, _renderTargetHeight, DXGI_FORMAT_R16G16B16A16_FLOAT);   // r AO, gba SSGI
 	_aoFullTex = full.Tex;
 	_aoFullSRV = full.SRV;
 	_aoFullRTV = full.RTV;

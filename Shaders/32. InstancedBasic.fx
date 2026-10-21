@@ -103,7 +103,7 @@ cbuffer cbPerFrame
     // 하늘 환경광 (Volume > Indirect Lighting): rgb = 확산 환경광 배율 × 틴트, w = 반사 배율
     float4 gIndirect = float4(1.0f, 1.0f, 1.0f, 1.0f);
     float4 gIndirectGI = float4(1.0f, 1.0f, 1.0f, 1.0f);   // Adaptive Probe Volume 빛의 배율 = Volume Indirect Lighting 만 (날씨 · 낮밤은 프로브가 모은 하늘에 이미)
-    float4 gSsaoParams = float4(0.0f, 0.0f, 0.0f, 0.0f);   // Screen Space Ambient Occlusion: x = Direct Lighting Strength (직접광에 곱하는 몫)
+    float4 gSsaoParams = float4(0.0f, 0.0f, 0.0f, 0.0f);   // Screen Space Ambient Occlusion: x = Direct Lighting Strength (직접광에 곱하는 몫), y > 0 = SSGI (gSsaoMap 의 gba)
 
     // Light.cullingMask: 빛마다 비추는 레이어 비트 (배열 순서 = gDirLights · gSpotLights · gPointLights). RenderLayers::SetLightMasks
     uint4 gDirLightMask = uint4(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
@@ -1428,6 +1428,9 @@ float3 ShadeLit(LitSurface surf, float3 posW, float3 N, float3 V, float4 ssaoPos
     float NoV = saturate(dot(N, V));
     float ao = surf.Occlusion * ambientAccess;
     color += ambient * diffuse * ao;
+    // Screen Space Global Illumination (HDRP): 둘레 면에서 한 번 튕긴 빛 (SSAO 결과의 gba — 확산 조도 / π, Multiplier 곱함)
+    if (gShaderSetting.gUseSsaoMap && gSsaoParams.y > 0.0f)
+        color += diffuse * gSsaoMap.SampleLevel(samLinear, ssaoPosH.xy, 0.0f).gba * surf.Occlusion;
     if (translucent)
     {
         float3 giUnused;

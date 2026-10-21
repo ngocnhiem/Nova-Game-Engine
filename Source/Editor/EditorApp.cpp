@@ -56,6 +56,7 @@
 #include "Ssao.h"
 #include "MotionVectors.h"
 #include "Upscaler.h"
+#include "Ssgi.h"
 #include "OcclusionCulling.h"
 #include "TransformBench.h"
 #include "SceneStreaming.h"
@@ -243,6 +244,7 @@ bool EditorApp::Init()
 		RenderGraph::RegisterEditor();        // nova rendergraph (Window > Analysis > Render Graph Viewer)
 		VirtualTexturing::RegisterEditor();   // nova vt
 		RenderPipelineSettings::RegisterEditor();   // nova renderpath (Rendering Path — Forward · Forward+ · Deferred)
+		Ssgi::RegisterEditor();                     // nova ssgi info
 		Jobs::RegisterEditor();   // nova jobs (Job System — info · test · bench · set)
 		RenderThread::RegisterEditor();   // nova renderthread (Multithreaded Rendering)
 		Memory::Heaps::RegisterEditor();   // nova memory (알로케이터 검사 · 씬 힙 통계)
@@ -466,6 +468,12 @@ static void SetSsaoParams(FxEffect* fx)
 static void UseSsaoSettings(const Ssao::Settings& s)
 {
 	s_SsaoParams = XMFLOAT4(s.Active() ? s.DirectLightingStrength : 0.0f, 0.0f, 0.0f, 0.0f);
+	SetSsaoParams(Effects::InstancedBasicFX->GetFX());
+}
+// Screen Space Global Illumination: y = SSAO 결과 텍스처의 gba (간접광) 를 쓰나 (0 = 안 씀 — 프로브 찍기의 흰 텍스처 등)
+static void UseSsgi(float intensity)
+{
+	s_SsaoParams.y = intensity;
 	SetSsaoParams(Effects::InstancedBasicFX->GetFX());
 }
 static XMFLOAT4 ApplyIndirectLighting(const VolumeStack& stack)
@@ -889,6 +897,18 @@ void EditorApp::RenderGameView(GfxRenderTargetView* renderTargetView, const Game
 				PostProcessingManager::GetI()->RenderSSAO(d.View, d.Proj, ssaoSettings, ssaoReadsMotion ? motionVectors : nullptr);   // TAA 지터 그대로 (깊이 프리패스와 같은 투영)
 				UseSsaoSettings(ssaoSettings);
 			});
+	else
+		UseSsaoSettings(Ssao::Settings{});   // 프로브 · GI 찍기: SSAO 흰 맵, SSGI 없음
+
+	// Screen Space Global Illumination (HDRP): 깊이 프리패스 + 지난 프레임 장면 색 → SSAO 결과의 gba (본 패스가 확산 환경광에 더한다)
+	const Ssgi::Settings ssgiSettings = Ssgi::Settings::FromStack(stack);
+	if (!probe && !giCapture && ssgiSettings.Active())
+		g.AddPass("SSGI", [&](RenderGraph::Builder& b) { b.Read(tNormalDepth); b.Read(tAO); tAO = b.Write(tAO); },
+			[&](const RenderGraph::Resources&) {
+				UseSsgi(Ssgi::Render(false, ssgiSettings, ssao, d.View, d.Proj));
+			});
+	else if (!probe)
+		Ssgi::Render(false, Ssgi::Settings{}, nullptr, d.View, d.Proj);   // 꺼짐 (히스토리 버림)
 
 	// 이 뷰의 빛 · 그림자 · 프로브 값을 Lit 효과 (+ 패키지 셰이더) 에 — 포워드 본 패스 · 디퍼드 G-버퍼 · 조명이 같이 쓴다 (cbPerFrame)
 	auto bindFrame = [&]() {
@@ -1294,6 +1314,15 @@ void EditorApp::_Editor_OnSceneRender(GfxRenderTargetView* renderTargetView, Edi
 			PostProcessingManager::GetI()->_Editor_RenderSSAO(camera, ssaoSettings);
 			UseSsaoSettings(ssaoSettings);
 		});
+
+	const Ssgi::Settings ssgiSettings = Ssgi::Settings::FromStack(stack);
+	if (ssgiSettings.Active())
+		g.AddPass("SSGI", [&](RenderGraph::Builder& b) { b.Read(tNormalDepth); b.Read(tAO); tAO = b.Write(tAO); },
+			[&](const RenderGraph::Resources&) {
+				UseSsgi(Ssgi::Render(true, ssgiSettings, ssao, camera->View(), camera->Proj()));
+			});
+	else
+		Ssgi::Render(true, Ssgi::Settings{}, nullptr, camera->View(), camera->Proj());
 
 	// 이 뷰의 빛 · 그림자 · 프로브 값 (포워드 본 패스 · 디퍼드가 같이 쓴다)
 	auto bindFrame = [&]() {

@@ -32,6 +32,7 @@ namespace
 	};
 	State s_State;
 	bool s_Active[2] = {};
+	bool s_Keep[2] = {};   // SSGI 가 이번 프레임 색을 원한다
 
 	constexpr float kMaxDistance = 40.0f;   // 광선 최대 길이 (m)
 
@@ -57,6 +58,19 @@ namespace
 namespace ScreenSpaceReflection
 {
 	bool Active(bool editor) { return s_Active[editor ? 1 : 0]; }
+
+	void KeepHistory(bool editor) { s_Keep[editor ? 1 : 0] = true; }
+
+	bool GetHistory(bool editor, GfxShaderResourceView** srv, XMFLOAT4X4* viewProj, UINT* mips)
+	{
+		const History& h = s_History[editor ? 1 : 0];
+		if (!h.Valid || !h.SRV)
+			return false;
+		if (srv) *srv = h.SRV.Get();
+		if (viewProj) *viewProj = h.ViewProj;
+		if (mips) *mips = h.Mips;
+		return true;
+	}
 
 	void Prepare(const VolumeStack& stack, bool editor, bool capture, GfxShaderResourceView* normalDepth, CXMMATRIX view, CXMMATRIX proj)
 	{
@@ -124,7 +138,9 @@ namespace ScreenSpaceReflection
 	void StoreHistory(GfxContext* dc, GfxRenderTargetView* sceneTarget, bool editor)
 	{
 		History& h = s_History[editor ? 1 : 0];
-		if (!s_Active[editor ? 1 : 0] || !sceneTarget)
+		const bool keep = s_Keep[editor ? 1 : 0];
+		s_Keep[editor ? 1 : 0] = false;
+		if ((!s_Active[editor ? 1 : 0] && !keep) || !sceneTarget)
 		{
 			h.Valid = false;   // 다시 켜면 그 프레임의 색부터 (예전 색 · 카메라는 버림)
 			return;

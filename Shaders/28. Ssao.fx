@@ -210,7 +210,7 @@ float4 PS_Upsample(VertexOut pin) : SV_Target
 {
     float4 nd = gNormalDepthMap.Load(int3(int2(pin.PosH.xy), 0));
     if (nd.w > 1e4f)
-        return 1.0f;
+        return float4(1.0f, 0.0f, 0.0f, 0.0f);   // r = AO, gba = SSGI (Ssgi 가 채운다 — 없으면 0)
     float2 f = pin.PosH.xy / gAoSize.z - 0.5f;   // 계산 텍셀 좌표 (가운데 = 정수)
     float2 base = floor(f);
     float2 t = f - base;
@@ -232,7 +232,7 @@ float4 PS_Upsample(VertexOut pin) : SV_Target
             if (dz < bestDz) { bestDz = dz; best = ao; }
         }
     }
-    return wsum > 1e-4f ? sum / wsum : best;   // 모두 다른 면이면 가장 가까운 깊이의 것
+    return float4(wsum > 1e-4f ? sum / wsum : best, 0.0f, 0.0f, 0.0f);   // 모두 다른 면이면 가장 가까운 깊이의 것
 }
 
 // 표본 수 = Volume 의 Samples (Low 4 · Medium 8 · High 14)

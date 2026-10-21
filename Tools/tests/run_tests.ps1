@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -6888,6 +6888,167 @@ public static class NovaRegionDiff
     finally { Stop-TestEditor $ed | Out-Null }
 }
 
+# Screen Space Global Illumination (HDRP Volume): 해 받은 빨간 판 옆의 그늘진 흰 벽이 붉게 물든다 (한 번 튕긴 빛, 굽기 없음)
+function Suite-Ssgi
+{
+    Write-Host '[ssgi]'
+    if (-not ('NovaRegionDiff' -as [type]))
+    {
+        Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+using System; using System.Drawing; using System.Drawing.Imaging; using System.Runtime.InteropServices;
+public static class NovaRegionDiff
+{
+    static byte[] Read(string path, out int w, out int h, out int stride)
+    {
+        using (var bmp = new Bitmap(path))
+        {
+            w = bmp.Width; h = bmp.Height;
+            var d = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            stride = d.Stride;
+            var b = new byte[d.Stride * h];
+            Marshal.Copy(d.Scan0, b, 0, b.Length);
+            bmp.UnlockBits(d);
+            return b;
+        }
+    }
+    public static double[] Diff(string a, string b, double x0, double y0, double x1, double y1)
+    {
+        int w, h, s, w2, h2, s2;
+        var A = Read(a, out w, out h, out s); var B = Read(b, out w2, out h2, out s2);
+        double sum = 0, sum2 = 0, rb = 0, lb = 0; int n = 0;
+        for (int y = (int)(y0 * h); y < (int)(y1 * h); y++)
+            for (int x = (int)(x0 * w); x < (int)(x1 * w); x++)
+            {
+                int i = y * s + x * 4;
+                double la = (A[i] + A[i + 1] + A[i + 2]) / 3.0, lB = (B[i] + B[i + 1] + B[i + 2]) / 3.0;
+                double d = lB - la;
+                sum += Math.Abs(d); sum2 += d * d; n++;
+                rb += (B[i + 2] - B[i]) - (A[i + 2] - A[i]);
+                lb += lB;
+            }
+        if (n == 0) return new double[] { 0, 0, 0, 0 };
+        double mean = sum / n;
+        double signedMean = 0;
+        for (int y = (int)(y0 * h); y < (int)(y1 * h); y++)
+            for (int x = (int)(x0 * w); x < (int)(x1 * w); x++)
+            { int i = y * s + x * 4; signedMean += (B[i] + B[i + 1] + B[i + 2]) / 3.0 - (A[i] + A[i + 1] + A[i + 2]) / 3.0; }
+        signedMean /= n;
+        double var = sum2 / n - signedMean * signedMean;
+        return new double[] { mean, Math.Sqrt(Math.Max(var, 0)), rb / n, lb / n };
+    }
+}
+"@
+    }
+    $dir = Join-Path $Project 'Assets\SsgiTest'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $red = Get-Content (Join-Path $Project 'Assets\Materials\Red Plastic.mat') -Raw | ConvertFrom-Json
+    $red.BaseColor = @(0.9, 0.05, 0.03, 1); $red.Smoothness = 0.1
+    $red | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $dir 'Red.mat')
+    $white = Get-Content (Join-Path $Project 'Assets\Materials\Floor.mat') -Raw | ConvertFrom-Json
+    $white.BaseColor = @(0.85, 0.85, 0.85, 1); $white.Smoothness = 0.05
+    $white | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $dir 'White.mat')
+    $file = Join-Path $dir 'Ssgi.volumeprofile'
+    $rel = 'Assets\SsgiTest\Ssgi.volumeprofile'
+    function Profile([hashtable]$values)
+    {
+        $params = @{}
+        foreach ($k in $values.Keys) { $params[$k] = @{ override = $true; value = @([double]$values[$k], 0, 0, 0) } }
+        @{ nova_volume_profile = 1; components = @(@{ type = 'ScreenSpaceGlobalIllumination'; active = $true; params = $params }) } | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $file
+        # 파일 감시가 다시 읽을 때까지 (시간 — 빠른 장치는 프레임 수로는 모자라다), 그다음 시간 누적이 쌓이게
+        $want = [bool]([double]$values['enabled'])
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while ($sw.Elapsed.TotalSeconds -lt 20)
+        {
+            Invoke-Nova 'wait 5' | Out-Null
+            $i = Invoke-NovaJson 'ssgi info'
+            if ($i -and ([bool]$i.active) -eq $want) { break }
+        }
+        Start-Sleep -Milliseconds 1500
+        Invoke-Nova 'wait 30' | Out-Null
+    }
+    $script:giShot = 0
+    function Shot
+    {
+        $script:giShot++
+        $path = Join-Path $Out ("ssgi_{0}.png" -f $script:giShot)
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        do { $r = Invoke-NovaJson ('screenshot "' + $path + '" --view game'); if (-not $r) { Start-Sleep -Milliseconds 2000 } } while (-not $r -and $sw.Elapsed.TotalSeconds -lt 600)
+        $path
+    }
+    function Mat([string]$obj, [string]$mat) { Invoke-Nova ('set ' + $obj + ' --component MeshRenderer --values "{\"m_MaterialPaths\":[\"Assets/SsgiTest/' + $mat + '\"]}"') | Out-Null }
+    function Scene
+    {
+        Invoke-Nova 'scene new --force' | Out-Null
+        Invoke-Nova 'create plane --name Ground --scale 3,1,3' | Out-Null
+        Mat 'Ground' 'White.mat'
+        # 해 받는 빨간 판 + 그 옆 그늘진 흰 벽 (해는 +X 쪽에서 −X 로 — 벽의 −X 면은 그늘)
+        Invoke-Nova 'create cube --name Slab --position 0,0.03,0 --scale 3.6,0.06,4' | Out-Null
+        Mat 'Slab' 'Red.mat'
+        Invoke-Nova 'create cube --name Wall --position 2.2,1.5,0 --scale 0.3,3,6' | Out-Null
+        Mat 'Wall' 'White.mat'
+        Invoke-Nova 'set "Directional Light" --rotation 55,270,0' | Out-Null
+        Invoke-Nova 'set "Main Camera" --component Camera --values "{\"antiAliasing\":0}"' | Out-Null
+        Invoke-Nova 'set "Main Camera" --position -3.5,1.6,-1.2 --rotation 8,75,0' | Out-Null
+        Invoke-Nova 'create volume --name GiVolume' | Out-Null
+        Profile @{ enabled = 0 }
+        Invoke-Nova ('set GiVolume --component Volume --values "{\"profile\":\"' + ($rel -replace '\\', '\\\\') + '\",\"priority\":50}"') | Out-Null
+        Invoke-Nova 'window game' | Out-Null
+        Invoke-Nova 'wait 20' | Out-Null
+    }
+    # 벽의 그늘진 면 (화면 오른쪽 가운데) · 하늘 (화면 위)
+    function WallFace($a, $b) { [NovaRegionDiff]::Diff($a, $b, 0.62, 0.30, 0.86, 0.62) }
+    function Sky($a, $b) { [NovaRegionDiff]::Diff($a, $b, 0.05, 0.00, 0.40, 0.10) }
+
+    $ed = Start-TestEditor
+    try
+    {
+        Scene
+        $off = Shot
+        Profile @{ enabled = 1; quality = 1 }
+        $on = Shot
+        $w = WallFace $off $on; $sk = Sky $off $on
+        $info = Invoke-NovaJson 'ssgi info'
+        $infoText = if ($info) { $info | ConvertTo-Json -Compress } else { 'no reply' }
+        Add-Result ssgi 'SSGI: the shaded white wall next to the sunlit red slab turns red (one-bounce light, no baking)' ($w[2] -gt 4 -and $w[0] -gt 2 -and $sk[0] -lt 0.5) ("wall: +{0:F1} luma, R-B +{1:F1}; sky change {2:F2} (ssgi {3})" -f $w[0], $w[2], $sk[0], $(if ($info.active) { 'on' } else { $infoText }))
+        Add-Result ssgi 'nova ssgi info: half resolution, Medium = 2 rays x 24 steps' ($info.active -and $info.size -and $info.size[0] -eq [math]::Ceiling($info.full[0] / 2) -and $info.rays -eq 2 -and $info.steps -eq 24) $infoText
+        Profile @{ enabled = 1; quality = 1; intensity = 2 }
+        $double = Shot
+        $w2 = WallFace $off $double
+        $ratio = $w2[2] / [math]::Max($w[2], 0.01)
+        Add-Result ssgi 'Multiplier 2 about doubles the bounce' ($ratio -gt 1.5 -and $ratio -lt 2.6) ("R-B gain x1 +{0:F1}, x2 +{1:F1} (ratio {2:F2})" -f $w[2], $w2[2], $ratio)
+        # 판이 흰색이면 붉은빛이 오지 않는다 (색은 맞은 곳의 장면 색에서)
+        Profile @{ enabled = 1; quality = 1 }
+        Mat 'Slab' 'White.mat'
+        Invoke-Nova 'wait 20' | Out-Null
+        $whiteOn = Shot
+        Profile @{ enabled = 0 }
+        $whiteOff = Shot
+        $ww = WallFace $whiteOff $whiteOn
+        Add-Result ssgi 'the bounce takes the color of what it hits (white slab: brighter wall, no red)' ($ww[0] -gt 2 -and [math]::Abs($ww[2]) -lt $w[2] * 0.35) ("white slab: +{0:F1} luma, R-B {1:F1} (red slab {2:F1})" -f $ww[0], $ww[2], $w[2])
+        Profile @{ enabled = 1; quality = 2; fullResolution = 1 }
+        $full = Invoke-NovaJson 'ssgi info'
+        Add-Result ssgi 'High + Full Resolution: 4 rays x 32 steps at full size' ($full.rays -eq 4 -and $full.steps -eq 32 -and $full.size[0] -eq $full.full[0]) ("rays {0}, steps {1}, size {2} of {3}" -f $full.rays, $full.steps, $full.size[0], $full.full[0])
+        Invoke-Nova 'window scene' | Out-Null
+        Invoke-Nova 'wait 10' | Out-Null
+        $sv = Invoke-NovaJson 'ssgi info --view scene'
+        Add-Result ssgi 'Scene view runs its own SSGI (same Volume)' ($sv.active) ("scene view active {0}" -f $sv.active)
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+
+    # OpenGL: 같은 셰이더 (DXC → GLSL)
+    $ed = Start-TestEditor -OpenGL
+    try
+    {
+        Scene
+        $glOff = Shot
+        Profile @{ enabled = 1; quality = 1 }
+        $glOn = Shot
+        $g = WallFace $glOff $glOn
+        Add-Result ssgi 'OpenGL: the same red bounce on the wall (cross-compiled shader)' ($g[2] -gt 4 -and [math]::Abs($g[2] - $w[2]) / $w[2] -lt 0.35) ("R-B +{0:F1} (DX11 +{1:F1})" -f $g[2], $w[2])
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+}
+
 function Capture-Scenes([switch]$OpenGL, [switch]$Vulkan, [switch]$D3D12, [string]$dir)
 {
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -9519,6 +9680,7 @@ try
                 'renderscale' { Suite-RenderScale }
                 'arealight' { Suite-AreaLight }
                 'fogvolume' { Suite-FogVolume }
+                'ssgi' { Suite-Ssgi }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }

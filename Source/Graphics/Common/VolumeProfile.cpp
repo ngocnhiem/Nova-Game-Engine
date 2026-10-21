@@ -115,7 +115,7 @@ const std::vector<std::string>& VolumeComponent::Types()
 	static const std::vector<std::string> kTypes = {
 		"Bloom", "ChannelMixer", "ChromaticAberration", "ColorAdjustments", "ColorLookup", "DepthOfField", "FilmGrain", "LensDistortion", "LiftGammaGain",
 		"MotionBlur", "PaniniProjection", "ScreenSpaceLensFlare", "ShadowsMidtonesHighlights", "SplitToning", "SunShafts", "Tonemapping", "Vignette", "WhiteBalance",
-		"Shadows", "Fog", "Atmosphere", "IndirectLighting", "ScreenSpaceReflection", "AmbientOcclusion", "MotionVectors", "Exposure" };
+		"Shadows", "Fog", "Atmosphere", "IndirectLighting", "ScreenSpaceReflection", "ScreenSpaceGlobalIllumination", "AmbientOcclusion", "MotionVectors", "Exposure" };
 	return kTypes;
 }
 
@@ -335,6 +335,22 @@ std::unique_ptr<VolumeComponent> VolumeComponent::Create(const std::string& type
 			P("smoothnessFadeStart", "Smoothness Fade Start", K::Clamped, 0.9f, 0.0f, 1.0f),
 			P("screenFadeDistance", "Screen Edge Fade Distance", K::Clamped, 0.1f, 0.0f, 1.0f),
 			P("depthBufferThickness", "Object Thickness", K::Clamped, 0.01f, 0.0f, 1.0f),
+		};
+	}
+	else if (type == "ScreenSpaceGlobalIllumination")
+	{
+		// HDRP Screen Space Global Illumination: 깊이 프리패스를 걷는 광선이 맞은 곳의 지난 프레임 장면 색 = 한 번 튕긴 간접광 (굽기 없음 — 큰 월드)
+		c->DisplayName = "Screen Space Global Illumination";
+		c->Category = "Lighting";
+		c->Params = {
+			P("enabled", "Enable", K::Bool, 0.0f),
+			PEnum("quality", "Quality", { "Low", "Medium", "High" }, 1),
+			P("fullResolution", "Full Resolution", K::Bool, 0.0f),
+			P("maxRayLength", "Max Ray Length", K::Float, 12.0f, 0.5f),
+			P("depthBufferThickness", "Depth Tolerance", K::Float, 0.35f, 0.01f),
+			P("denoise", "Denoise", K::Bool, 1.0f),
+			P("denoiserRadius", "Denoiser Radius", K::Clamped, 1.0f, 0.1f, 2.0f),
+			P("intensity", "Multiplier", K::Float, 1.0f, 0.0f),
 		};
 	}
 	else if (type == "Exposure")
@@ -725,6 +741,7 @@ bool VolumeStack::IsActive(const std::string& type) const
 	if (type == "SunShafts") return c->F("intensity") > 0.0f;
 	if (type == "WhiteBalance") return c->F("temperature") != 0.0f || c->F("tint") != 0.0f;
 	if (type == "Fog" || type == "Atmosphere" || type == "ScreenSpaceReflection") return c->B("enabled");
+	if (type == "ScreenSpaceGlobalIllumination") return c->B("enabled") && c->F("intensity") > 0.0f;
 	if (type == "AmbientOcclusion") return c->B("enabled") && c->F("intensity") > 0.0f;
 	if (type == "Exposure") return c->I("mode") == 1 || c->F("compensation") != 0.0f;
 	if (type == "IndirectLighting")

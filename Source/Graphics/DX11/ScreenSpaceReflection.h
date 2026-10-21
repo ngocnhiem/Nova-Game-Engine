@@ -19,4 +19,8 @@ namespace ScreenSpaceReflection
 	void StoreHistory(GfxContext* dc, GfxRenderTargetView* sceneTarget, bool editor);
 	// 마지막 Prepare 가 켰는가 (CLI · 검사용)
 	bool Active(bool editor);
+	// Screen Space Global Illumination 도 지난 프레임 색을 쓴다: 이번 프레임 끝에 (SSR 이 꺼져 있어도) 저장해 달라
+	void KeepHistory(bool editor);
+	// 지난 프레임 장면 색 (감마, 밉 체인) · 그것을 그린 ViewProj · 밉 수. 없으면 false
+	bool GetHistory(bool editor, GfxShaderResourceView** srv, XMFLOAT4X4* viewProj, UINT* mips);
 }

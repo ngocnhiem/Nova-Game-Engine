@@ -19,7 +19,7 @@
 | 면광 (사각형 Area Light) | ◐ | 실시간 Rectangle · Disc (LTC, Forward+ · Deferred) — [AREA_LIGHT](AREA_LIGHT.md). 그림자 · 쿠키는 아직 |
 | 그림자 (PSSM · 큐브 · PCSS 흐림 · 프로젝터 텍스처) | ◐ | 캐스케이드 · 소프트 섀도 있음, 쿠키 (프로젝터) · PCSS 확인 필요 |
 | **라이트맵 굽기** | ○ | 없음 (APV 프로브만) |
-| **실시간 GI (VoxelGI · SDFGI · SSIL)** | ○ | APV (Adaptive Probe Volume) · 하늘 Indirect 만. 큰 월드용 동적 GI 없음 |
+| 실시간 GI (VoxelGI · SDFGI · SSIL) | ◐ | **SSGI** (HDRP Screen Space Global Illumination — 굽기 없는 한 번 튕김, [SSGI](SSGI.md)) + APV. 화면 밖 빛 (계단식 SDF · 복셀) 은 아직 |
 | 반사 (프로브 · SSR) | ● | Reflection Probe · SSR |
 | 데칼 | ● | [DECAL](DECAL.md) |
 | 하늘 (HDRI · 절차 · 물리) | ● | Atmosphere · Day Night |
@@ -136,7 +136,7 @@ VFX Graph · Shader Graph · Terrain Graph (Gaea 식) · PCG · 절차적 식생
 
 | # | 무엇 | Godot 참고 | NOVA 이름 | 규모 |
 |---|---|---|---|---|
-| 1-1 | **큰 월드 동적 GI** — 먼저 화면 공간 (SSGI / SSIL), 다음 카메라 둘레 계단식 SDF · 복셀 GI | SSIL · SDFGI (캐스케이드, 굽기 없음) | Screen Space Global Illumination · (HDRP 식) | L |
+| 1-1 | **큰 월드 동적 GI** — 먼저 화면 공간 (SSGI / SSIL), 다음 카메라 둘레 계단식 SDF · 복셀 GI (2026-10-21 SSGI 완료) | SSIL · SDFGI (캐스케이드, 굽기 없음) | Screen Space Global Illumination · (HDRP 식) | L |
 | 1-2 | 국소 **Fog Volume** (상자 · 구 · 밀도 텍스처 — 늪 · 동굴 · 성 안) (2026-10-21 완료, 3D 텍스처 제외) | FogVolume · FogMaterial | Local Volumetric Fog (HDRP) | M |
 | 1-3 | **면광** (사각형 · 원판, LTC) — 실내 · 횃불 · 창 (2026-10-21 완료, 그림자 제외) | 사각형 면광 | Area Light (Rectangle · Disc) | M |
 | 1-4 | **Render Scale + FSR 1 / 2 업스케일** (2026-10-16 FSR 1 완료) — 고해상도에서 GPU 아끼기 | 해상도 배율 · FSR 2.2 | URP Render Scale · Upscaling Filter | M |

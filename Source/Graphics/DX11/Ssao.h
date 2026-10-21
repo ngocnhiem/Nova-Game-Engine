@@ -35,6 +35,8 @@ public:
 	ComPtr<GfxShaderResourceView> NormalDepthSRV();
 	// 전체 해상도 AO (32 가 읽는다)
 	ComPtr<GfxShaderResourceView> AmbientSRV();
+	// 전체 해상도 결과 (RGBA16F: r = AO, gba = Screen Space Global Illumination 의 간접광 — Ssgi 가 덮어쓴다)
+	GfxRenderTargetView* AmbientRTV() { return _aoFullRTV.Get(); }
 	GfxTexture2D* AmbientTexture() { return _aoFullTex.Get(); }
 
 	void Init(int32 width, int32 height);
