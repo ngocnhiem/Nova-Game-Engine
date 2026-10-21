@@ -4,6 +4,7 @@
 #include "AutoSave.h"
 #include "PackageManagerWindow.h"
 #include "AudioMixerWindow.h"
+#include "InputActionsEditorWindow.h"
 #include "ShaderGraphRuntime.h"
 #include "ShaderGraphWindow.h"
 #include "VfxGraphWindow.h"
@@ -441,12 +442,15 @@ bool App::Init()
 	EditorGUIManager::GetI()->RegisterWindow(new RenderGraphViewerWindow);   // Window > Analysis > Render Graph Viewer
 	EditorGUIManager::GetI()->RegisterWindow(new PackageManagerWindow);   // Window > Package Manager
 	EditorGUIManager::GetI()->RegisterWindow(new AudioMixerWindow);       // Window > Audio Mixer
+	EditorGUIManager::GetI()->RegisterWindow(new InputActionsEditorWindow);   // .inputactions 두 번 클릭 · Project Settings > Input System Package
+	InputActionsEditorWindow::RegisterEditor();
 	ShaderGraph::RegisterEditor();                                         // Window > Shader Graph · .shadergraph · nova shadergraph
 	VfxGraphWindow::RegisterEditor();
 	TerrainGraphWindow::RegisterEditor();                                  // Window > Terrain Graph · .terraingraph · World Terrain 의 Open Terrain Graph
 	PCGGraphWindow::RegisterEditor();                                      // Window > PCG Graph · .pcg · PCG Volume 의 Open Graph                                      // Window > Visual Effects · .vfx · nova vfx · VFX Assistant (Claude Code)
 	}
 
+	InputActionsEditorWindow::RegisterCli();   // nova inputactions · nova input (플레이어도 — 검사)
 	RenderThread::InitFromSettings();   // Multithreaded Rendering (DirectX 11): 장치 · ImGui 다음
 	log << "App::Init -> ResourceManager & InputManager..." << std::endl; log.flush();
 	ResourceManager::GetI()->Init(_device);

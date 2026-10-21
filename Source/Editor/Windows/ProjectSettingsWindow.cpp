@@ -12,6 +12,7 @@
 #include "TagsAndLayers.h"
 #include "PhysicsSettings.h"
 #include "Physics2DSettings.h"
+#include "InputActionsEditorWindow.h"
 
 namespace
 {
@@ -19,7 +20,7 @@ namespace
 	bool s_FocusNext = false;
 	std::string s_Category = "Graphics";
 
-	const char* kCategories[] = { "Graphics", "Physics", "Physics 2D", "Player", "Tags and Layers" };
+	const char* kCategories[] = { "Graphics", "Input System Package", "Physics", "Physics 2D", "Player", "Tags and Layers" };
 
 	// Unity 의 Graphics APIs for Windows 목록: 위가 우선. 선택한 줄을 위/아래로, + 로 추가, - 로 제거 (하나는 남긴다)
 	bool DrawGraphicsApiList(std::vector<GraphicsAPI>& list)
@@ -649,6 +650,8 @@ namespace ProjectSettingsWindow
 			DrawPhysics2D();
 		else if (s_Category == "Tags and Layers")
 			DrawTagsAndLayers();
+		else if (s_Category == "Input System Package")
+			InputActionsEditorWindow::DrawProjectSettings();
 		ImGui::EndChild();
 
 		ImGui::End();

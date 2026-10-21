@@ -106,6 +106,8 @@ namespace ScriptEngine
 	std::string GetApiJson();
 	// [BurstCompile] 네이티브 (ScriptCore BurstNative.Command): {op: info | compile [wait, force] | set enabled | player out | source} → JSON
 	std::string BurstCommand(const std::string& json);
+	// Input System (ScriptCore InputSystem.Command): {op: info | action name | rebind name [index, group]} → JSON
+	std::string InputCommand(const std::string& json);
 	// Assets 아래의 .cs 파일들 (절대 경로, 정렬)
 	std::vector<std::wstring> ScriptFilePaths();
 

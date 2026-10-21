@@ -104,4 +104,18 @@ PROJECT_ICONS = {
     # 면광 (Rectangle · Disc) — 빛나는 판 + 아래로 퍼지는 빛
     "light_area": _svg('''<rect x="2.5" y="2.5" width="11" height="4" rx="0.8" fill="#F7D65A"/>
   <path d="M3.2 8.2 L1.8 13.5 M6.1 8.2 L5.6 13.5 M9.9 8.2 L10.4 13.5 M12.8 8.2 L14.2 13.5" stroke="#F5C542" stroke-width="1.3" stroke-linecap="round"/>'''),
+    # Input Action Asset (.inputactions) — 문서 + 게임패드
+    "input_actions": _svg('''<path d="M3 1.5 H10 L13 4.5 V14.5 H3 Z" fill="#E6E6E6"/>
+  <polygon points="10,1.5 13,4.5 10,4.5" fill="#B0B0B0"/>
+  <path d="M4.2 9 Q4.2 7.2 5.8 7.2 H10.2 Q11.8 7.2 11.8 9 L12.2 12 Q12.3 13.2 11.2 13 L9.9 11.6 H6.1 L4.8 13 Q3.7 13.2 3.8 12 Z" fill="#3F78C0"/>
+  <rect x="5.2" y="9.1" width="2.2" height="0.8" fill="#FFFFFF"/>
+  <rect x="5.9" y="8.4" width="0.8" height="2.2" fill="#FFFFFF"/>
+  <circle cx="9.6" cy="9" r="0.55" fill="#FFFFFF"/>
+  <circle cx="10.6" cy="10" r="0.55" fill="#FFFFFF"/>'''),
+    # Player Input 컴포넌트 — 게임패드
+    "player_input": _svg('''<path d="M2 8 Q2 5 4.5 5 H11.5 Q14 5 14 8 L14.6 12.2 Q14.8 14 13.1 13.6 L11 11.6 H5 L2.9 13.6 Q1.2 14 1.4 12.2 Z" fill="#C8C8C8"/>
+  <rect x="3.6" y="7.6" width="3.2" height="1.1" fill="#3A3A3A"/>
+  <rect x="4.65" y="6.55" width="1.1" height="3.2" fill="#3A3A3A"/>
+  <circle cx="10.4" cy="7.4" r="0.8" fill="#3A3A3A"/>
+  <circle cx="12" cy="8.9" r="0.8" fill="#3A3A3A"/>'''),
 }

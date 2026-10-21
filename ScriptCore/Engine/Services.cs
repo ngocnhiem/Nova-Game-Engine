@@ -175,6 +175,170 @@ namespace NovaEngine
         F1 = 282, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
         CapsLock = 301, RightShift = 303, LeftShift, RightControl, LeftControl, RightAlt, LeftAlt,
         Mouse0 = 323, Mouse1, Mouse2, Mouse3, Mouse4, Mouse5, Mouse6,
+        // 게임패드 단추 (Unity 와 같은 번호 — Xbox 패드: 0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 6 Back, 7 Start, 8 왼 스틱, 9 오른 스틱)
+        JoystickButton0 = 330, JoystickButton1, JoystickButton2, JoystickButton3, JoystickButton4, JoystickButton5, JoystickButton6, JoystickButton7, JoystickButton8, JoystickButton9,
+        JoystickButton10, JoystickButton11, JoystickButton12, JoystickButton13, JoystickButton14, JoystickButton15, JoystickButton16, JoystickButton17, JoystickButton18, JoystickButton19,
+        Joystick1Button0 = 350, Joystick1Button1, Joystick1Button2, Joystick1Button3, Joystick1Button4, Joystick1Button5, Joystick1Button6, Joystick1Button7, Joystick1Button8, Joystick1Button9,
+        Joystick1Button10, Joystick1Button11, Joystick1Button12, Joystick1Button13, Joystick1Button14, Joystick1Button15, Joystick1Button16, Joystick1Button17, Joystick1Button18, Joystick1Button19,
+        Joystick2Button0 = 370, Joystick2Button1, Joystick2Button2, Joystick2Button3, Joystick2Button4, Joystick2Button5, Joystick2Button6, Joystick2Button7, Joystick2Button8, Joystick2Button9,
+        Joystick2Button10, Joystick2Button11, Joystick2Button12, Joystick2Button13, Joystick2Button14, Joystick2Button15, Joystick2Button16, Joystick2Button17, Joystick2Button18, Joystick2Button19,
+        Joystick3Button0 = 390, Joystick3Button1, Joystick3Button2, Joystick3Button3, Joystick3Button4, Joystick3Button5, Joystick3Button6, Joystick3Button7, Joystick3Button8, Joystick3Button9,
+        Joystick3Button10, Joystick3Button11, Joystick3Button12, Joystick3Button13, Joystick3Button14, Joystick3Button15, Joystick3Button16, Joystick3Button17, Joystick3Button18, Joystick3Button19,
+        Joystick4Button0 = 410, Joystick4Button1, Joystick4Button2, Joystick4Button3, Joystick4Button4, Joystick4Button5, Joystick4Button6, Joystick4Button7, Joystick4Button8, Joystick4Button9,
+        Joystick4Button10, Joystick4Button11, Joystick4Button12, Joystick4Button13, Joystick4Button14, Joystick4Button15, Joystick4Button16, Joystick4Button17, Joystick4Button18, Joystick4Button19,
+    }
+
+    /// <summary>Unity 의 CursorLockMode</summary>
+    public enum CursorLockMode { None = 0, Locked = 1, Confined = 2 }
+
+    /// <summary>
+    /// Unity 의 Cursor — Locked = 커서를 숨기고 게임 화면 가운데에 묶는다 (마우스 이동량은 Mouse.delta · Input.GetAxis("Mouse X")),
+    /// Confined = 게임 창 안에만. 에디터: Game 뷰에 입력 포커스가 있을 때만, Esc 로 풀린다 (Unity 와 같이)
+    /// </summary>
+    public static class Cursor
+    {
+        public static CursorLockMode lockState
+        {
+            get => CursorState.Current();
+            set { CursorState.s_Lock = value; CursorState.Apply(); }
+        }
+
+        public static bool visible
+        {
+            get => CursorState.s_Visible;
+            set { CursorState.s_Visible = value; CursorState.Apply(); }
+        }
+    }
+
+    internal static class CursorState
+    {
+        internal static CursorLockMode s_Lock = CursorLockMode.None;
+        internal static bool s_Visible = true;
+
+        // 에디터에서 Esc 로 풀면 None (Unity 와 같이)
+        internal static CursorLockMode Current()
+        {
+            try { return (CursorLockMode)NovaEngine.InputSystem.InputNative.NovaInputSys_GetCursorLock(); }
+            catch (EntryPointNotFoundException) { return s_Lock; }
+            catch (DllNotFoundException) { return s_Lock; }
+        }
+
+        internal static void Apply()
+        {
+            try { NovaEngine.InputSystem.InputNative.NovaInputSys_SetCursor((int)s_Lock, s_Visible ? 1 : 0); }
+            catch (EntryPointNotFoundException) { }
+            catch (DllNotFoundException) { }
+        }
+
+        internal static void Reset()
+        {
+            s_Lock = CursorLockMode.None;
+            s_Visible = true;
+            Apply();
+        }
+    }
+
+    // 옛 Input 의 게임패드 (Unity 의 Input Manager 기본 축 · joystick button) — 프레임에 한 번 엔진 상태를 읽는다
+    internal static unsafe class LegacyPads
+    {
+        static int s_Frame = -1;
+        static readonly uint[] s_Buttons = new uint[8], s_Prev = new uint[8];
+        static readonly float[] s_Axes = new float[48];
+        static readonly bool[] s_Connected = new bool[8];
+        static Vector2 s_MouseDelta;
+        static bool s_HasDelta;
+
+        internal static bool HasMouseDelta { get { Refresh(); return s_HasDelta; } }
+        internal static Vector2 MouseDelta { get { Refresh(); return s_MouseDelta; } }
+
+        static void Refresh()
+        {
+            if (s_Frame == Time.frameCount) return;
+            s_Frame = Time.frameCount;
+            Array.Copy(s_Buttons, s_Prev, 8);
+            NovaEngine.InputSystem.NativeInputState st = default;
+            int ok = 0;
+            try { ok = NovaEngine.InputSystem.InputNative.NovaInputSys_GetState(&st, sizeof(NovaEngine.InputSystem.NativeInputState)); }
+            catch (EntryPointNotFoundException) { }
+            catch (DllNotFoundException) { }
+            s_HasDelta = ok != 0;
+            s_MouseDelta = ok != 0 ? new Vector2(st.mouseDX, st.mouseDY) : Vector2.zero;
+            for (int i = 0; i < 8; i++)
+            {
+                s_Connected[i] = ok != 0 && st.padConnected[i] != 0;
+                s_Buttons[i] = s_Connected[i] ? Map(st.padButtons[i]) : 0;
+                for (int k = 0; k < 6; k++) s_Axes[i * 6 + k] = s_Connected[i] ? st.padAxes[i * 6 + k] : 0f;
+            }
+        }
+
+        // XInput 비트 → Unity joystick button 번호
+        static uint Map(uint x)
+        {
+            uint b = 0;
+            if ((x & 0x1000) != 0) b |= 1u << 0;   // A
+            if ((x & 0x2000) != 0) b |= 1u << 1;   // B
+            if ((x & 0x4000) != 0) b |= 1u << 2;   // X
+            if ((x & 0x8000) != 0) b |= 1u << 3;   // Y
+            if ((x & 0x0100) != 0) b |= 1u << 4;   // LB
+            if ((x & 0x0200) != 0) b |= 1u << 5;   // RB
+            if ((x & 0x0020) != 0) b |= 1u << 6;   // Back
+            if ((x & 0x0010) != 0) b |= 1u << 7;   // Start
+            if ((x & 0x0040) != 0) b |= 1u << 8;   // 왼 스틱 누름
+            if ((x & 0x0080) != 0) b |= 1u << 9;   // 오른 스틱 누름
+            return b;
+        }
+
+        // joystick = 0 이면 모든 패드, 1 ~ 4 는 그 패드
+        internal static bool Button(int joystick, int button, int mode)
+        {
+            Refresh();
+            for (int i = 0; i < 8; i++)
+            {
+                if (joystick > 0 && Slot(joystick) != i) continue;
+                bool now = (s_Buttons[i] & (1u << button)) != 0, before = (s_Prev[i] & (1u << button)) != 0;
+                if (mode == 0 ? now : mode == 1 ? now && !before : !now && before) return true;
+            }
+            return false;
+        }
+
+        // n 번째로 연결된 패드의 칸
+        static int Slot(int joystick)
+        {
+            int n = 0;
+            for (int i = 0; i < 8; i++)
+                if (s_Connected[i] && ++n == joystick) return i;
+            return -1;
+        }
+
+        // 축: 0 = 왼 스틱 X, 1 = 왼 스틱 Y (위 +), 3 = 오른 스틱 X, 4 = 오른 스틱 Y, 2 = 트리거 (오른 - 왼). Unity 기본 dead 0.19
+        internal static float Axis(int axis)
+        {
+            Refresh();
+            float best = 0f;
+            for (int i = 0; i < 8; i++)
+            {
+                if (!s_Connected[i]) continue;
+                float v = axis switch
+                {
+                    0 => s_Axes[i * 6 + 0],
+                    1 => s_Axes[i * 6 + 1],
+                    3 => s_Axes[i * 6 + 2],
+                    4 => s_Axes[i * 6 + 3],
+                    _ => s_Axes[i * 6 + 5] - s_Axes[i * 6 + 4],
+                };
+                if (Math.Abs(v) < 0.19f) v = 0f;
+                if (Math.Abs(v) > Math.Abs(best)) best = v;
+            }
+            return best;
+        }
+
+        internal static string[] Names()
+        {
+            Refresh();
+            var l = new List<string>();
+            for (int i = 0; i < 8; i++) if (s_Connected[i]) l.Add(i < 4 ? "Controller (Xbox One For Windows)" : "NOVA Injected Gamepad");
+            return l.ToArray();
+        }
     }
 
     public enum TouchPhase { Began, Moved, Stationary, Ended, Canceled }
@@ -222,6 +386,12 @@ namespace NovaEngine
 
         static unsafe bool Key(KeyCode k, int mode)
         {
+            int kc = (int)k;
+            if (kc >= (int)KeyCode.JoystickButton0 && kc <= (int)KeyCode.Joystick4Button19)
+            {
+                int joystick = (kc - (int)KeyCode.JoystickButton0) / 20, button = (kc - (int)KeyCode.JoystickButton0) % 20;
+                return LegacyPads.Button(joystick, button, mode);
+            }
             int vk = ToVk(k);
             if (vk < 0) return Native.Api.Input_GetMouseButton(-1 - vk, mode) != 0;
             return vk != 0 && Native.Api.Input_GetKey(vk, mode) != 0;
@@ -239,6 +409,14 @@ namespace NovaEngine
             name = (name ?? "").Trim().ToLowerInvariant();
             if (name.Length == 1 && name[0] >= 'a' && name[0] <= 'z') return KeyCode.A + (name[0] - 'a');
             if (name.Length == 1 && name[0] >= '0' && name[0] <= '9') return KeyCode.Alpha0 + (name[0] - '0');
+            // "joystick button 0" · "joystick 1 button 3" (Unity 의 이름)
+            if (name.StartsWith("joystick "))
+            {
+                string[] w = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (w.Length == 3 && w[1] == "button" && int.TryParse(w[2], out int jb) && jb >= 0 && jb < 20) return KeyCode.JoystickButton0 + jb;
+                if (w.Length == 4 && w[2] == "button" && int.TryParse(w[1], out int jn) && int.TryParse(w[3], out int jb2) && jn >= 1 && jn <= 4 && jb2 >= 0 && jb2 < 20)
+                    return KeyCode.JoystickButton0 + jn * 20 + jb2;
+            }
             switch (name)
             {
                 case "space": return KeyCode.Space; case "return": case "enter": return KeyCode.Return; case "escape": return KeyCode.Escape;
@@ -290,17 +468,17 @@ namespace NovaEngine
         {
             switch (axisName)
             {
-                case "Horizontal": return (GetKey(KeyCode.D) || GetKey(KeyCode.RightArrow) ? 1f : 0f) - (GetKey(KeyCode.A) || GetKey(KeyCode.LeftArrow) ? 1f : 0f);
-                case "Vertical": return (GetKey(KeyCode.W) || GetKey(KeyCode.UpArrow) ? 1f : 0f) - (GetKey(KeyCode.S) || GetKey(KeyCode.DownArrow) ? 1f : 0f);
+                case "Horizontal": return Larger((GetKey(KeyCode.D) || GetKey(KeyCode.RightArrow) ? 1f : 0f) - (GetKey(KeyCode.A) || GetKey(KeyCode.LeftArrow) ? 1f : 0f), LegacyPads.Axis(0));
+                case "Vertical": return Larger((GetKey(KeyCode.W) || GetKey(KeyCode.UpArrow) ? 1f : 0f) - (GetKey(KeyCode.S) || GetKey(KeyCode.DownArrow) ? 1f : 0f), LegacyPads.Axis(1));
                 case "Mouse X": UpdateMouse(); return s_MouseDelta.x * 0.1f;
                 case "Mouse Y": UpdateMouse(); return s_MouseDelta.y * 0.1f;
                 case "Mouse ScrollWheel": return mouseScrollDelta.y * 0.1f;
-                case "Jump": return GetKey(KeyCode.Space) ? 1f : 0f;
-                case "Fire1": return GetKey(KeyCode.LeftControl) || GetMouseButton(0) ? 1f : 0f;
-                case "Fire2": return GetKey(KeyCode.LeftAlt) || GetMouseButton(1) ? 1f : 0f;
-                case "Fire3": return GetKey(KeyCode.LeftShift) || GetMouseButton(2) ? 1f : 0f;
-                case "Submit": return GetKey(KeyCode.Return) || GetKey(KeyCode.Space) ? 1f : 0f;
-                case "Cancel": return GetKey(KeyCode.Escape) ? 1f : 0f;
+                case "Jump": return GetKey(KeyCode.Space) || GetKey(KeyCode.JoystickButton3) ? 1f : 0f;
+                case "Fire1": return GetKey(KeyCode.LeftControl) || GetMouseButton(0) || GetKey(KeyCode.JoystickButton0) ? 1f : 0f;
+                case "Fire2": return GetKey(KeyCode.LeftAlt) || GetMouseButton(1) || GetKey(KeyCode.JoystickButton1) ? 1f : 0f;
+                case "Fire3": return GetKey(KeyCode.LeftShift) || GetMouseButton(2) || GetKey(KeyCode.JoystickButton2) ? 1f : 0f;
+                case "Submit": return GetKey(KeyCode.Return) || GetKey(KeyCode.Space) || GetKey(KeyCode.JoystickButton0) ? 1f : 0f;
+                case "Cancel": return GetKey(KeyCode.Escape) || GetKey(KeyCode.JoystickButton1) ? 1f : 0f;
             }
             throw new ArgumentException($"Input Axis {axisName} is not setup.");
         }
@@ -309,12 +487,19 @@ namespace NovaEngine
         {
             if (s_MouseFrame == Time.frameCount) return;
             Vector3 m = mousePosition;
-            s_MouseDelta = s_MouseFrame < 0 ? Vector2.zero : new Vector2(m.x - s_LastMouse.x, m.y - s_LastMouse.y);
+            // 엔진이 잰 이동량 (Cursor.lockState = Locked 로 커서가 가운데로 돌아가도)
+            if (LegacyPads.HasMouseDelta) s_MouseDelta = s_MouseFrame < 0 ? Vector2.zero : LegacyPads.MouseDelta;
+            else s_MouseDelta = s_MouseFrame < 0 ? Vector2.zero : new Vector2(m.x - s_LastMouse.x, m.y - s_LastMouse.y);
             s_LastMouse = m;
             s_MouseFrame = Time.frameCount;
         }
 
         public static float GetAxisRaw(string axisName) => Raw(axisName);
+
+        static float Larger(float a, float b) => Math.Abs(b) > Math.Abs(a) ? b : a;
+
+        /// <summary>연결된 게임패드 이름 (Unity 의 Input.GetJoystickNames)</summary>
+        public static string[] GetJoystickNames() => LegacyPads.Names();
 
         // Unity 기본값: gravity 3, sensitivity 3, snap (방향이 바뀌면 0 부터)
         public static float GetAxis(string axisName)
@@ -338,12 +523,12 @@ namespace NovaEngine
         {
             switch (b)
             {
-                case "Jump": return Key(KeyCode.Space, mode);
-                case "Fire1": return Key(KeyCode.LeftControl, mode) || Key(KeyCode.Mouse0, mode);
-                case "Fire2": return Key(KeyCode.LeftAlt, mode) || Key(KeyCode.Mouse1, mode);
-                case "Fire3": return Key(KeyCode.LeftShift, mode) || Key(KeyCode.Mouse2, mode);
-                case "Submit": return Key(KeyCode.Return, mode) || Key(KeyCode.Space, mode);
-                case "Cancel": return Key(KeyCode.Escape, mode);
+                case "Jump": return Key(KeyCode.Space, mode) || Key(KeyCode.JoystickButton3, mode);
+                case "Fire1": return Key(KeyCode.LeftControl, mode) || Key(KeyCode.Mouse0, mode) || Key(KeyCode.JoystickButton0, mode);
+                case "Fire2": return Key(KeyCode.LeftAlt, mode) || Key(KeyCode.Mouse1, mode) || Key(KeyCode.JoystickButton1, mode);
+                case "Fire3": return Key(KeyCode.LeftShift, mode) || Key(KeyCode.Mouse2, mode) || Key(KeyCode.JoystickButton2, mode);
+                case "Submit": return Key(KeyCode.Return, mode) || Key(KeyCode.Space, mode) || Key(KeyCode.JoystickButton0, mode);
+                case "Cancel": return Key(KeyCode.Escape, mode) || Key(KeyCode.JoystickButton1, mode);
             }
             throw new ArgumentException($"Input Button {b} is not setup.");
         }

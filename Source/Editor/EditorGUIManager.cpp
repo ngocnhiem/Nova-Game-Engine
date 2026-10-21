@@ -616,6 +616,9 @@ void EditorGUIManager::RenderEditorWindows()
         {
             s_WasPlaying = playing;
             GameViewEditorWindow::OnPlayModeChanged(playing);
+            // 게임패드는 Play 중 게임 것 (Unity 처럼) — 에디터 창 사이를 패드로 옮겨 다니지 않게
+            if (playing) ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+            else ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
             if (!playing)
                 ScriptEngine::OnPlayModeChanged(false);   // Play 중에 바뀐 스크립트를 이제 다시 읽는다
         }

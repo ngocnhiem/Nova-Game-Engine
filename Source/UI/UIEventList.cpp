@@ -32,6 +32,8 @@ namespace
 		if (t == "bool") return "Boolean";
 		if (t == "string") return "String";
 		if (t == "int") return "Int32";
+		if (t == "CallbackContext") return "CallbackContext";
+		if (t == "PlayerInput") return "PlayerInput";
 		return "";
 	}
 
@@ -154,6 +156,8 @@ void UIEventList::Draw(const char* title, const char* dynamicType)
 						}
 						for (const ScriptEngine::MethodInfo& m : info->Methods)
 						{
+							if (m.ParamType == "CallbackContext" || m.ParamType == "PlayerInput")
+								continue;   // 이벤트 값으로만 (Inspector 에 적을 수 없다)
 							const std::string item = m.Name + " (" + m.ParamType + ")";
 							if (ImGui::MenuItem(item.c_str()))
 								pick(info->Name + "." + m.Name, m.ParamType, false);

@@ -78,6 +78,9 @@ namespace NovaEngine.Interop
                 NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.BeginFrame();   // Temp 되돌림 · TempJob 수명
             }
             catch (Exception e) { LogException(e); }
+            // Input System: 장치를 읽고 동작 (started · performed · canceled · PlayerInput 메시지) — MonoBehaviour.Update 전
+            try { NovaEngine.InputSystem.InputSystem.OnEngineFrame(); }
+            catch (Exception e) { LogException(e); }
         }
 
         // 엔진 시점: kind 0 = Play 끝 (남은 NativeContainer 알림 · 풀기)
@@ -90,6 +93,7 @@ namespace NovaEngine.Interop
                 {
                     NovaEngine.Jobs.JobScheduler.CompleteAll();   // 도는 잡 (게임 코드) 을 끝내고 잠금을 푼 뒤
                     NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("end of Play");
+                    NovaEngine.InputSystem.InputSystem.ResetSession();   // 동작 끄기 · 게임이 만든 장치 · 등록 지우기 (Unity 의 도메인 다시 읽기처럼)
                 }
             }
             catch (Exception e) { LogException(e); }
@@ -203,6 +207,7 @@ namespace NovaEngine.Interop
                 NovaEngine.Jobs.JobScheduler.CompleteAll();   // 게임 어셈블리를 내리기 전에 그 코드를 도는 잡이 없게
                 NovaEngine.Collections.LowLevel.Unsafe.CollectionsRuntime.EndSession("script reload");
                 NovaEngine.Burst.Compiler.BurstNative.Unload();
+                NovaEngine.InputSystem.InputSystem.ResetSession();
             }
             catch (Exception e) { LogException(e); }
             ScriptRegistry.Clear();
@@ -232,6 +237,16 @@ namespace NovaEngine.Interop
         {
             string r;
             try { r = NovaEngine.Burst.Compiler.BurstNative.Command(Native.Str(jsonUtf8)); }
+            catch (Exception e) { r = "{\"error\":" + JsonSerializer.Serialize(e.GetType().Name + ": " + e.Message) + "}"; }
+            return Marshal.StringToCoTaskMemUTF8(r);
+        }
+
+        // nova input (장치 · 켜진 동작 · PlayerInput · 다시 묶기) — JSON 을 받아 JSON 을 돌려준다
+        [UnmanagedCallersOnly]
+        public static IntPtr InputCommand(byte* jsonUtf8)
+        {
+            string r;
+            try { r = NovaEngine.InputSystem.InputSystem.Command(Native.Str(jsonUtf8)); }
             catch (Exception e) { r = "{\"error\":" + JsonSerializer.Serialize(e.GetType().Name + ": " + e.Message) + "}"; }
             return Marshal.StringToCoTaskMemUTF8(r);
         }
@@ -341,6 +356,8 @@ namespace NovaEngine.Interop
             if (t == typeof(float)) return "float";
             if (t == typeof(string)) return "string";
             if (t == typeof(bool)) return "bool";
+            if (t == typeof(NovaEngine.InputSystem.InputAction.CallbackContext)) return "CallbackContext";
+            if (t == typeof(NovaEngine.InputSystem.PlayerInput)) return "PlayerInput";
             return null;
         }
 

@@ -69,6 +69,7 @@ namespace
 		{ "TrailRenderer",       "Trail Renderer",        "Effects",       "particle_system",   true  },
 		{ "VisualEffect",        "Visual Effect",         "Effects",       "particle_system",   true  },
 		{ "AudioSource",         "Audio Source",          "Audio",         "audio_source",      false },
+		{ "PlayerInput",         "Player Input",          "Input",         "player_input",      true  },
 		{ "AudioListener",       "Audio Listener",        "Audio",         "audio_listener",    true  },
 		{ "Camera",              "Camera",                "Rendering",     "camera",            true  },
 		{ "SpriteRenderer",      "Sprite Renderer",       "Rendering",     "sprite_renderer",   true  },

@@ -16,6 +16,7 @@
 #include "ScriptEngine.h"
 #include "CSharpScript.h"
 #include "GameViewEditorWindow.h"
+#include "InputDevices.h"
 #include "GameObjectFactory.h"
 #include "ComponentFactory.h"
 #include "RigidBody.h"
@@ -795,8 +796,8 @@ namespace
 	{
 		if (out == nullptr) return;
 		float x = 0, y = 0;
-		GameViewEditorWindow::MouseToGame(x, y);
-		*out = Vec4(x, y, 0.0f, GameViewEditorWindow::HasInputFocus() ? GameViewEditorWindow::ScrollDelta() : 0.0f);
+		InputDevices::MousePosition(x, y);   // NOVA CLI 로 넣은 위치가 있으면 그것
+		*out = Vec4(x, y, 0.0f, InputDevices::ScrollY());
 	}
 	void Screen_Get(int* w, int* h)
 	{

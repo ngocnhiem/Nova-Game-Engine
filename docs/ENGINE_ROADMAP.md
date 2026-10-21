@@ -126,7 +126,7 @@ VFX Graph · Shader Graph · Terrain Graph (Gaea 식) · PCG · 절차적 식생
 |---|---|---|---|---|
 | 0-1 | **Avatar Mask + 레이어 블렌딩 (Override · Additive)** (2026-10-16 완료) — 하체는 이동, 상체는 공격 · 막기 · 활 조준 | AnimationNodeBlend2 의 filter (본 필터), AnimationTree 의 OneShot (filter) | Avatar Mask 에셋 · Animator Layer 의 Mask · Blending · Weight · Sync | M |
 | 0-2 | **애니메이션 이벤트** (2026-10-16 완료) — 클립 시간에 함수 · 소리 · 이펙트 (타격 판정 · 발소리) | Animation 의 Call Method · Audio Playback 트랙 | AnimationEvent (`<모델>.animevents` 에 저장), `OnAnimationEvent` · 수신 MonoBehaviour 메서드 | M |
-| 0-3 | **Input Actions** — 행동 이름 · 키 / 패드 묶기 · 재지정 · 데드존 · 저장 | InputMap · InputEventAction · 데드존 | Input Action Asset · PlayerInput · `action.WasPressedThisFrame()` | M |
+| 0-3 | **Input Actions** (2026-10-22 완료 — [INPUT_SYSTEM](INPUT_SYSTEM.md): Unity 와 같은 `.inputactions` · 합성 · 처리기 · 상호작용 · XInput 게임패드 · PlayerInput · 스킴 자동 전환 · 다시 묶기 + 저장 · Input Actions 창 · C# 클래스 · `InputSystem.actions` · `nova input`. PlayerInputManager · UI 패드 이동은 아직) — 행동 이름 · 키 / 패드 묶기 · 재지정 · 데드존 · 저장 | InputMap · InputEventAction · 데드존 | Input Action Asset · PlayerInput · `action.WasPressedThisFrame()` | M |
 | 0-4 | **전투 기반 (게임플레이 프레임워크)** — 히트박스 · 허트박스, 피해 · 경직 · 넉백, 무기 장착 (손 본에 붙이기) | Area3D · 그룹 · 신호 | 트리거 콜라이더 + 0-2 이벤트, `Animator.GetBoneTransform` 소켓, 샘플 패키지 `com.nova.combat` | M |
 | 0-5 | **세이브 · 로드** — 월드 상태 · 인벤토리 · 위치 · 퀘스트 값을 JSON (+ 이진) 으로, 버전 · 비동기 | ConfigFile · ResourceSaver · `var_to_bytes` | `SaveSystem` (JsonUtility 식 직렬화) + 슬롯 | M |
 | 0-6 | **데이터 에셋 (ScriptableObject)** (2026-10-16 완료) — 무기 · 아이템 · 적 스탯 | Resource · 사용자 Resource 클래스 | ScriptableObject · `CreateAssetMenu` | M |

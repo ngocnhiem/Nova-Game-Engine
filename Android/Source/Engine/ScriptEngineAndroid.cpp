@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "ScriptEngine.h"
+#include "InputDevices.h"
 #include "ScriptBindings.h"
 #include "AndroidEngine.h"
 #ifdef __EMSCRIPTEN__
@@ -371,6 +372,8 @@ namespace ScriptEngine
 		memcpy(s_PrevKeys, s_Keys, sizeof(s_Keys));
 		for (int vk = 1; vk < 256; ++vk)
 			s_Keys[vk] = (::GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+		InputDevices::Poll(true);   // Input System: 마우스 이동량 (터치 = 마우스), CLI 로 넣은 입력
+		InputDevices::MergeKeys(s_Keys);
 		if (!Application::IsPaused())
 			s_PlayTime += (float)DT;
 		++s_Frame;

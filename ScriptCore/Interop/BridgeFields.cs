@@ -10,6 +10,7 @@ namespace NovaEngine.Interop
     // 직렬화 필드 하나의 형식 (Unity 의 SerializedProperty 종류와 같은 범위).
     //  Kind: int, float, bool, string, Vector2, Vector3, Vector4, Color, enum, GameObject, Transform, AudioClip,
     //        ScriptableObject (값 = 에셋 경로), array (T[] · List<T>, Element), struct ([Serializable] 클래스 · 구조체, Children), unsupported
+    //        InputActionAsset (값 = .inputactions 경로), InputActionReference ({asset, action id}), InputAction (동작 하나 — 이름 · 형식 · 바인딩)
     internal sealed class FieldMeta
     {
         public FieldInfo Field;            // 배열 원소는 null
@@ -104,6 +105,9 @@ namespace NovaEngine.Interop
             if (t == typeof(GameObject)) return "GameObject";
             if (t == typeof(Transform)) return "Transform";
             if (t == typeof(AudioClip)) return "AudioClip";
+            if (t == typeof(NovaEngine.InputSystem.InputActionAsset)) return "InputActionAsset";
+            if (t == typeof(NovaEngine.InputSystem.InputActionReference)) return "InputActionReference";
+            if (t == typeof(NovaEngine.InputSystem.InputAction)) return "InputAction";
             if (typeof(ScriptableObject).IsAssignableFrom(t)) return "ScriptableObject";
             return "unsupported";
         }
@@ -186,6 +190,18 @@ namespace NovaEngine.Interop
                 case "Transform": w.WriteNumberValue(v is Object o && !(o is null) ? o.m_Id : 0UL); break;
                 case "AudioClip": w.WriteStringValue(v is AudioClip c ? c.m_Path ?? "" : ""); break;
                 case "ScriptableObject": w.WriteStringValue(v is ScriptableObject so && !so.m_Destroyed ? so.m_AssetPath ?? "" : ""); break;
+                case "InputActionAsset": w.WriteStringValue(v is NovaEngine.InputSystem.InputActionAsset ia ? ia.m_AssetPath ?? "" : ""); break;
+                case "InputActionReference":
+                    if (v is NovaEngine.InputSystem.InputActionReference r && r.m_Asset != null && !string.IsNullOrEmpty(r.m_ActionId))
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("asset", r.m_Asset.m_AssetPath ?? "");
+                        w.WriteString("action", r.m_ActionId);
+                        w.WriteEndObject();
+                    }
+                    else w.WriteNullValue();
+                    break;
+                case "InputAction": NovaEngine.InputSystem.InputActionFieldJson.Write(w, v as NovaEngine.InputSystem.InputAction, f.Field?.Name); break;
                 case "array":
                     w.WriteStartArray();
                     if (v is IList list)
@@ -238,7 +254,12 @@ namespace NovaEngine.Interop
             if (root.ValueKind != JsonValueKind.Object) return;
             foreach (FieldMeta f in FieldsOf(target.GetType()))
             {
-                if (!root.TryGetProperty(f.Field.Name, out JsonElement e)) continue;
+                if (!root.TryGetProperty(f.Field.Name, out JsonElement e))
+                {
+                    if (f.Kind == "InputAction" && f.Field.GetValue(target) == null)
+                        f.Field.SetValue(target, new NovaEngine.InputSystem.InputAction(Nicify(f.Field.Name)));
+                    continue;
+                }
                 try
                 {
                     object v = ReadValue(f, e, f.Field.GetValue(target));
@@ -268,6 +289,9 @@ namespace NovaEngine.Interop
                 case "Transform": { ulong id = e.GetUInt64(); return id == 0 ? null : new Transform(id); }
                 case "AudioClip": { string p = e.GetString(); return string.IsNullOrEmpty(p) ? null : new AudioClip(p); }
                 case "ScriptableObject": return e.ValueKind == JsonValueKind.String ? ScriptableAssets.Load(e.GetString(), t) : null;
+                case "InputActionAsset": return e.ValueKind == JsonValueKind.String ? NovaEngine.InputSystem.InputActionAssetCache.Load(e.GetString()) : null;
+                case "InputActionReference": return NovaEngine.InputSystem.InputActionFieldJson.ReadReference(e);
+                case "InputAction": return NovaEngine.InputSystem.InputActionFieldJson.ReadAction(e, f.Field?.Name);
                 case "array":
                 {
                     if (e.ValueKind != JsonValueKind.Array) return current;

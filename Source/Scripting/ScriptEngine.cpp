@@ -7,6 +7,7 @@
 #include "ExternalScriptEditor.h"
 #include "ScriptableAssets.h"
 #include "BuildSettings.h"
+#include "InputDevices.h"
 #include <DotNet/hostfxr.h>
 #include <DotNet/coreclr_delegates.h>
 #include <filesystem>
@@ -62,6 +63,7 @@ namespace
 		void(__stdcall* AssetEvent)(int, const char*) = nullptr;   // 선택 (데이터 에셋 캐시)
 		void(__stdcall* EngineEvent)(int) = nullptr;   // 선택 (0 = Play 끝 — NativeContainer 누수 알림)
 		void* (__stdcall* BurstCommand)(const char*) = nullptr;   // 선택 ([BurstCompile] 네이티브 — nova burst · 플레이어 빌드)
+		void* (__stdcall* InputCommand)(const char*) = nullptr;   // 선택 (Input System — nova input info · action · rebind)
 	} m;
 
 	ScriptEngine::State s_State = ScriptEngine::State::NotStarted;
@@ -247,6 +249,8 @@ namespace
 			m.EngineEvent = nullptr;
 		if (load(dll.c_str(), type, L"BurstCommand", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.BurstCommand) < 0)
 			m.BurstCommand = nullptr;
+		if (load(dll.c_str(), type, L"InputCommand", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.InputCommand) < 0)
+			m.InputCommand = nullptr;
 		const wchar_t* appEvents = L"NovaEngine.Interop.AppEvents, NovaScriptCore";
 		if (load(dll.c_str(), appEvents, L"Pause", UNMANAGEDCALLERSONLY_METHOD, nullptr, (void**)&m.AppPause) < 0)
 			m.AppPause = nullptr;
@@ -360,6 +364,8 @@ namespace
 			<< "    <DebugType>portable</DebugType>\n"
 			<< "    <!-- Unity 와 같이 직렬화 필드의 '값을 할당하지 않음' 경고는 끈다 -->\n"
 			<< "    <NoWarn>$(NoWarn);CS0649;CS0169;CS0414;CS8618</NoWarn>\n"
+			<< "    <!-- Unity 와 같이 Active Input Handling = Both: 새 Input System (NovaEngine.InputSystem) 과 옛 Input 을 함께 -->\n"
+			<< "    <DefineConstants>$(DefineConstants);ENABLE_INPUT_SYSTEM;ENABLE_LEGACY_INPUT_MANAGER</DefineConstants>\n"
 			<< "  </PropertyGroup>\n"
 			<< "  <ItemGroup>\n"
 			<< "    <Compile Include=\"Assets\\**\\*.cs\" />\n";
@@ -739,6 +745,9 @@ namespace ScriptEngine
 		const bool focus = GameViewEditorWindow::HasInputFocus();
 		for (int vk = 1; vk < 256; ++vk)
 			s_Keys[vk] = focus && (::GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
+		// Input System: 게임패드 (XInput) · 마우스 이동량 · 커서 잠금, NOVA CLI 로 넣은 키 (포커스 없이도)
+		InputDevices::Poll(focus);
+		InputDevices::MergeKeys(s_Keys);
 		if (!Application::IsPaused())
 			s_PlayTime += (float)DT;
 		++s_Frame;
@@ -775,6 +784,7 @@ namespace ScriptEngine
 
 	void OnPlayModeChanged(bool playing)
 	{
+		InputDevices::OnPlayModeChanged(playing);   // 커서 잠금 풀기 · 진동 끄기 · CLI 로 넣은 입력 놓기
 		s_PlayTime = 0.0f;
 		s_Frame = 0;
 		memset(s_Keys, 0, sizeof(s_Keys));
@@ -1051,6 +1061,13 @@ namespace ScriptEngine
 		if (!s_AssemblyLoaded || m.BurstCommand == nullptr)
 			return "{\"error\":\"C# scripts are not loaded\"}";
 		return TakeString(m.BurstCommand(json.c_str()));
+	}
+
+	std::string InputCommand(const std::string& json)
+	{
+		if (!s_AssemblyLoaded || m.InputCommand == nullptr)
+			return "{\"error\":\"C# scripts are not loaded\"}";
+		return TakeString(m.InputCommand(json.c_str()));
 	}
 
 	std::vector<std::wstring> ScriptFilePaths()

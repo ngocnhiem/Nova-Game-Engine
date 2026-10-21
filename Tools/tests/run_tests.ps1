@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'burst', 'enginejobs', 'burstnative', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'fogvolume', 'ssgi', 'mathcollections', 'csjobs', 'burst', 'enginejobs', 'burstnative', 'inputsystem', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -8524,6 +8524,293 @@ public static class NBTest
     finally { Stop-TestEditor $ed | Out-Null }
 }
 
+# Input System (로드맵 0-3, Unity 의 com.unity.inputsystem): Input Actions 에셋 (Unity JSON) · CLI 로 만들기 · 만든 C# 클래스,
+#  PlayerInput (Send Messages · 스킴 자동 전환) · WASD 합성 · 스틱 데드존 · Hold · Tap · 1D Axis · WasPressedThisFrame,
+#  다시 묶기 (PerformInteractiveRebinding) + 저장 · 읽기, 프로젝트 동작 (InputSystem.actions) · 설정, 옛 Input 의 게임패드, Unity 6 기본 파일
+#  입력은 nova input 이 엔진에 넣는다 (실제 키보드 · 마우스를 흉내 내지 않는다 — 숨긴 검사 에디터)
+function Suite-InputSystem
+{
+    Write-Host '[inputsystem]'
+    $dir = Join-Path $Project 'Assets\InputTest'
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $unity = 'D:\UnityData\ProjectCA\Assets\InputSystem_Actions.inputactions'
+    $unityCopy = Join-Path $Out 'UnityDefault.inputactions'
+    if (Test-Path $unity) { Copy-Item $unity $unityCopy -Force }   # 읽기만 (원본은 그대로)
+    $asset = 'Assets/InputTest/TestControls.inputactions'
+    $cs = Join-Path $Out 'inputsystem.cs'
+    function Exec([string]$code) { $code | Set-Content -Encoding utf8 $cs; $r = Invoke-NovaJson "exec --file $cs"; if ($r) { "$($r.result)" } else { '(exec failed)' } }
+    function Wait-Sec([double]$sec) { $sw = [Diagnostics.Stopwatch]::StartNew(); while ($sw.Elapsed.TotalSeconds -lt $sec) { Invoke-Nova 'wait 5' | Out-Null } }
+    function Act([string]$name) { Invoke-NovaJson "input action $name" }
+    $ed = Start-TestEditor
+    try
+    {
+        Wait-Compile
+        # ---- 에셋 (CLI)
+        $c = Invoke-NovaJson "inputactions create $asset"
+        Invoke-Nova "inputactions add-action $asset --map Player --name Charge --type Button --interactions Hold(duration=0.3)" | Out-Null
+        Invoke-Nova "inputactions add-binding $asset --action Player/Charge --binding <Keyboard>/f --groups Keyboard&Mouse" | Out-Null
+        Invoke-Nova "inputactions add-action $asset --map Player --name Dash --type Button --interactions Tap" | Out-Null
+        Invoke-Nova "inputactions add-binding $asset --action Player/Dash --binding <Keyboard>/g --groups Keyboard&Mouse" | Out-Null
+        Invoke-Nova "inputactions add-action $asset --map Player --name Zoom --type Value --control Axis" | Out-Null
+        Invoke-Nova "inputactions add-composite $asset --action Player/Zoom --composite 1DAxis --parts negative=<Keyboard>/z;positive=<Keyboard>/x --groups Keyboard&Mouse" | Out-Null
+        $gen = Invoke-NovaJson "inputactions generate $asset --class TestControls"
+        $info = Invoke-NovaJson "inputactions info $asset"
+        $player = $info.maps | Where-Object { $_.name -eq 'Player' }
+        $move = $player.actions | Where-Object { $_.name -eq 'Move' }
+        $wasd = $move.bindings | Where-Object { $_.composite }
+        $json = Get-Content (Join-Path $Project 'Assets\InputTest\TestControls.inputactions') -Raw | ConvertFrom-Json
+        Add-Result inputsystem 'Input Actions asset (Unity .inputactions JSON): default Player/UI maps + Keyboard&Mouse/Gamepad/Touch schemes, actions · bindings · composites added from the CLI, C# class generated' ($c.maps -eq 2 -and $c.schemes -eq 3 -and $player.actions.Count -eq 12 -and $wasd.display -eq 'W|Up Arrow/A|Left Arrow/S|Down Arrow/D|Right Arrow' -and $json.maps[0].bindings[0].isComposite -ne $null -and $gen.file -like '*TestControls.cs') ("{0} maps, {1} Player actions, WASD '{2}', generated {3}" -f $c.maps, $player.actions.Count, $wasd.display, $gen.file)
+
+        @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using NovaEngine;
+using NovaEngine.InputSystem;
+
+// inputsystem 검사: PlayerInput (Send Messages) 메시지 · 만든 C# 클래스 콜백 · WasPressedThisFrame · 옛 Input 게임패드를 센다
+public class InputProbe : MonoBehaviour
+{
+    static readonly CultureInfo CI = CultureInfo.InvariantCulture;
+    public static Vector2 move;
+    public static int moveMessages, jumpMessages, controlsChanged, genJump, genMove, wasPressed, wasReleased, pressedFrames, legacyA, chargeMessages;
+    public static string scheme = "";
+    public static float legacyH, zoom;
+    TestControls controls;
+
+    void Start()
+    {
+        controls = new TestControls();
+        controls.Player.Jump.performed += ctx => genJump++;
+        controls.Player.Move.performed += ctx => genMove++;
+        controls.Player.Enable();
+    }
+
+    void OnDestroy() { controls?.Disable(); }
+
+    // PlayerInput: Send Messages
+    void OnMove(InputValue value) { move = value.Get<Vector2>(); moveMessages++; }
+    void OnJump(InputValue value) { jumpMessages++; }
+    void OnCharge(InputValue value) { chargeMessages++; }
+    void OnZoom(InputValue value) { zoom = value.Get<float>(); }
+    void OnControlsChanged(PlayerInput pi) { controlsChanged++; scheme = pi.currentControlScheme; }
+
+    void Update()
+    {
+        var pi = GetComponent<PlayerInput>();
+        var jump = pi != null && pi.actions != null ? pi.actions["Player/Jump"] : null;
+        if (jump != null)
+        {
+            if (jump.WasPressedThisFrame()) wasPressed++;
+            if (jump.WasReleasedThisFrame()) wasReleased++;
+            if (jump.IsPressed()) pressedFrames++;
+        }
+        legacyH = Input.GetAxisRaw("Horizontal");
+        if (Input.GetKeyDown(KeyCode.JoystickButton0)) legacyA++;
+    }
+
+    public static string Move() => move.x.ToString("0.####", CI) + "," + move.y.ToString("0.####", CI);
+    public static string Counts() => $"move {moveMessages} jump {jumpMessages} gen {genJump}/{genMove} pressed {wasPressed} released {wasReleased} frames {pressedFrames} changed {controlsChanged} scheme {scheme} charge {chargeMessages}";
+    public static string Legacy() => legacyH.ToString("0.###", CI) + " " + legacyA + " " + string.Join("|", Input.GetJoystickNames());
+
+    // 다시 묶기 저장 · 지우기 · 읽기
+    static string s_Saved;
+    public static string SaveOverrides()
+    {
+        var a = PlayerInput.all[0].actions;
+        s_Saved = a.SaveBindingOverridesAsJson();
+        a.RemoveAllBindingOverrides();
+        return s_Saved;
+    }
+    public static string LoadOverrides()
+    {
+        var a = PlayerInput.all[0].actions;
+        a.LoadBindingOverridesFromJson(s_Saved);
+        return a["Player/Jump"].GetBindingDisplayString();
+    }
+
+    // Unity 6 기본 .inputactions (ProjectCA 사본) 를 그대로 읽는다
+    public static string UnityDefault(string path)
+    {
+        var a = InputActionAsset.FromJson(System.IO.File.ReadAllText(path));
+        var player = a.FindActionMap("Player", true);
+        var ui = a.FindActionMap("UI", true);
+        var move = a["Player/Move"];
+        move.Enable();
+        int controls = move.controls.Count;
+        string display = move.GetBindingDisplayString(group: "Keyboard&Mouse");
+        move.Disable();
+        return $"{player.actions.Count} {ui.actions.Count} {a.controlSchemes.Count} {controls} {display} {a["Player/Interact"].interactions}";
+    }
+
+    // 코드로 만든 동작 (Unity 와 같은 API): 합성 · 처리기 · 가상 장치 (InputSystem.AddDevice + QueueStateEvent)
+    public static string CodeActions()
+    {
+        var pad = InputSystem.AddDevice<Gamepad>("ProbePad");
+        var action = new InputAction("Look", InputActionType.Value, expectedControlType: "Vector2");
+        action.AddBinding("<Gamepad>/rightStick").WithProcessor("invertVector2(invertX=false),scaleVector2(x=2,y=2)");
+        action.AddCompositeBinding("2DVector").With("Up", "<Keyboard>/i").With("Down", "<Keyboard>/k").With("Left", "<Keyboard>/j").With("Right", "<Keyboard>/l");
+        action.Enable();
+        InputSystem.QueueStateEvent(pad, new NovaEngine.InputSystem.LowLevel.GamepadState { rightStick = new Vector2(0.6f, 0.6f) });
+        InputSystem.Update();
+        var v = action.ReadValue<Vector2>();
+        string display = action.GetBindingDisplayString();
+        bool threw = false;
+        try { action.ReadValue<float>(); } catch (InvalidOperationException) { threw = true; }
+        action.Disable();
+        action.Dispose();
+        InputSystem.RemoveDevice(pad);
+        return v.x.ToString("0.###", CI) + "," + v.y.ToString("0.###", CI) + " " + display + " " + threw;
+    }
+}
+
+'@ | Set-Content -Encoding utf8 (Join-Path $dir 'InputProbe.cs')
+        Invoke-Nova 'inputactions project-wide --set Assets/InputTest/TestControls.inputactions' | Out-Null
+        Invoke-Nova 'inputactions settings --defaultHoldTime 0.35' | Out-Null
+        Wait-Compile
+        $si = Invoke-NovaJson 'scripting info'
+        Invoke-Nova 'scene new --force' | Out-Null
+        Invoke-Nova 'create empty --name Player' | Out-Null
+        Invoke-Nova 'add-component Player PlayerInput' | Out-Null
+        Invoke-Nova "set Player PlayerInput.actions=$asset" | Out-Null
+        # 방금 쓴 InputProbe.cs 가 컴파일될 때까지 (엔진이 파일을 알아채기 전에는 compiling 이 아직 false)
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while (-not (Invoke-NovaJson 'add-component Player InputProbe') -and $sw.Elapsed.TotalSeconds -lt 60) { Invoke-Nova 'wait 20' | Out-Null }
+        $si = Invoke-NovaJson 'scripting info'
+        $pij = Invoke-NovaJson 'get Player --component PlayerInput'
+        Invoke-Nova 'play' | Out-Null
+        Exec 'Application.targetFrameRate = 60; return "ok";' | Out-Null
+        Wait-Sec 0.5
+        $state = Invoke-NovaJson 'input info'
+        $pl = $state.players | Select-Object -First 1
+        Add-Result inputsystem 'PlayerInput: Default Map Player enabled, Keyboard&Mouse scheme picked (Keyboard + Mouse paired), project-wide actions on, script compiled with the generated class' (-not $si.hasErrors -and $pij.defaultActionMap -eq 'Player' -and $pl.map -eq 'Player' -and $pl.scheme -eq 'Keyboard&Mouse' -and ($pl.devices -contains 'Keyboard') -and $state.projectWideActions -like '*TestControls*') ("scheme {0}, map {1}, devices {2}, project-wide {3}, compile errors {4}" -f $pl.scheme, $pl.map, ($pl.devices -join '+'), $state.projectWideActions, $si.hasErrors)
+
+        # ---- WASD (2D Vector 합성, 대각선 정규화) → OnMove(InputValue), 놓으면 0 (Value 의 canceled 도 메시지)
+        Invoke-Nova 'input key w' | Out-Null
+        Invoke-Nova 'input key d' | Out-Null
+        Wait-Sec 0.15
+        $diag = Exec 'return InputProbe.Move();'
+        $mv = Act 'Player/Move'
+        Invoke-Nova 'input key w --up' | Out-Null
+        Invoke-Nova 'input key d --up' | Out-Null
+        Wait-Sec 0.15
+        $rel = Exec 'return InputProbe.Move();'
+        Add-Result inputsystem 'W+D on the WASD composite: Move = (0.7071, 0.7071) in OnMove(InputValue); released → (0, 0)' ($diag -eq '0.7071,0.7071' -and $rel -eq '0,0' -and $mv.phase -eq 'Started') ("held {0} (phase {1}, control {2}), released {3}" -f $diag, $mv.phase, $mv.control, $rel)
+
+        # ---- 단추: 한 프레임 누르기 → WasPressedThisFrame 한 번, performed 한 번 (OnJump), 만든 클래스 콜백
+        $before = Exec 'return InputProbe.Counts();'
+        Invoke-Nova 'input key space --tap' | Out-Null
+        Wait-Sec 0.2
+        $after = Exec 'return InputProbe.Counts();'
+        $j = Act 'Player/Jump'
+        Add-Result inputsystem 'Space tapped for one frame: OnJump once, WasPressedThisFrame / WasReleasedThisFrame once each, generated TestControls.Player.Jump.performed fired' ($after -match 'jump 1 gen 1/' -and $after -match 'pressed 1 released 1' -and $j.performed -eq 1 -and $j.canceled -eq 1) ("before [{0}] after [{1}], action performed {2} canceled {3}" -f $before, $after, $j.performed, $j.canceled)
+
+        # ---- Hold (0.3 초): 누르고 있으면 performed, 일찍 놓으면 canceled 만
+        Invoke-Nova 'input key f' | Out-Null
+        Wait-Sec 0.55
+        $h1 = Act 'Player/Charge'
+        Invoke-Nova 'input key f --up' | Out-Null
+        Wait-Sec 0.1
+        Invoke-Nova 'input key f --tap' | Out-Null
+        Wait-Sec 0.2
+        $h2 = Act 'Player/Charge'
+        Add-Result inputsystem 'Hold(duration=0.3): held 0.55 s → started + performed (phase Performed), release → canceled; a one-frame press → started + canceled, no performed' ($h1.phase -eq 'Performed' -and $h1.started -eq 1 -and $h1.performed -eq 1 -and $h2.started -eq 2 -and $h2.performed -eq 1 -and $h2.canceled -eq 2) ("held: {0} s/p/c {1}/{2}/{3}; after tap: s/p/c {4}/{5}/{6}" -f $h1.phase, $h1.started, $h1.performed, $h1.canceled, $h2.started, $h2.performed, $h2.canceled)
+
+        # ---- Tap (기본 0.2 초): 짧게 → performed, 길게 (0.4 초) → 시간 넘어 canceled
+        Invoke-Nova 'input key g --tap' | Out-Null
+        Wait-Sec 0.15
+        $t1 = Act 'Player/Dash'
+        Invoke-Nova 'input key g' | Out-Null
+        Wait-Sec 0.4
+        $t2 = Act 'Player/Dash'
+        Invoke-Nova 'input key g --up' | Out-Null
+        Add-Result inputsystem 'Tap: a short press performs, holding past the tap time cancels (timer)' ($t1.performed -eq 1 -and $t2.performed -eq 1 -and $t2.canceled -eq 1 -and $t2.phase -eq 'Waiting') ("tap: performed {0}; long press: performed {1} canceled {2} phase {3}" -f $t1.performed, $t2.performed, $t2.canceled, $t2.phase)
+
+        # ---- 1D Axis: x → +1, z → -1 (OnZoom)
+        Invoke-Nova 'input key x' | Out-Null
+        Wait-Sec 0.1
+        $zp = Exec 'return InputProbe.zoom.ToString();'
+        Invoke-Nova 'input key x --up' | Out-Null
+        Invoke-Nova 'input key z' | Out-Null
+        Wait-Sec 0.1
+        $zn = Exec 'return InputProbe.zoom.ToString();'
+        Invoke-Nova 'input key z --up' | Out-Null
+        Wait-Sec 0.1
+        Add-Result inputsystem '1D Axis composite (negative z, positive x): +1 / -1' ($zp -eq '1' -and $zn -eq '-1') "x → $zp, z → $zn"
+
+        # ---- 게임패드: 데드존 안 (0.05) → 그대로, 0.5 → 스킴 자동 전환 (Gamepad) + Move = (0.5-0.125)/0.8 = 0.4688
+        Invoke-Nova 'input gamepad --leftStick 0.05,0' | Out-Null
+        Wait-Sec 0.15
+        $g0 = Exec 'return InputProbe.Move() + " " + InputProbe.scheme;'
+        Invoke-Nova 'input gamepad --leftStick 0.5,0' | Out-Null
+        Wait-Sec 0.15
+        $g1 = Exec 'return InputProbe.Move() + " " + InputProbe.scheme + " " + InputProbe.controlsChanged;'
+        $pl2 = (Invoke-NovaJson 'input info').players | Select-Object -First 1
+        Invoke-Nova 'input gamepad --leftStick 0,0' | Out-Null
+        Invoke-Nova 'input gamepad --button buttonSouth --tap' | Out-Null
+        Wait-Sec 0.15
+        $gj = Exec 'return InputProbe.Counts();'
+        Add-Result inputsystem 'Gamepad: stick inside the dead zone ignored; 0.5 switches the scheme to Gamepad (OnControlsChanged) and Move = 0.4688 (stick dead zone 0.125 … 0.925); buttonSouth → OnJump' ($g0 -match '^0,0' -and $g1 -match '^0\.4688,0 Gamepad 1' -and $pl2.scheme -eq 'Gamepad' -and $gj -match 'jump 2 ') ("0.05: [{0}], 0.5: [{1}] devices {2}, after A: [{3}]" -f $g0, $g1, ($pl2.devices -join '+'), $gj)
+
+        # ---- 자판으로 돌아가며 그 누름도 동작에 (스킴 전환을 일으킨 키)
+        Invoke-Nova 'input key space --tap' | Out-Null
+        Wait-Sec 0.15
+        $back = Exec 'return InputProbe.Counts();'
+        Add-Result inputsystem 'Pressing a key again switches back to Keyboard&Mouse and that same press triggers Jump' ($back -match 'jump 3 ' -and $back -match 'scheme Keyboard&Mouse') $back
+
+        # ---- 다시 묶기: input rebind → 다음 키 (K) 가 Jump 의 Keyboard&Mouse 바인딩, 저장 · 지우기 (Space 로) · 읽기 (다시 K)
+        Invoke-NovaJson 'input rebind Player/Jump --group Keyboard&Mouse' | Out-Null
+        Wait-Sec 0.1
+        Invoke-Nova 'input key k --tap' | Out-Null
+        Wait-Sec 0.2
+        $rb = Act 'Player/Jump'
+        $c0 = Exec 'return InputProbe.jumpMessages.ToString();'
+        Invoke-Nova 'input key k --tap' | Out-Null
+        Wait-Sec 0.15
+        Invoke-Nova 'input key space --tap' | Out-Null
+        Wait-Sec 0.15
+        $c1 = Exec 'return InputProbe.jumpMessages.ToString();'
+        $saved = Exec 'return InputProbe.SaveOverrides();'
+        Wait-Sec 0.1
+        Invoke-Nova 'input key space --tap' | Out-Null
+        Wait-Sec 0.15
+        $c2 = Exec 'return InputProbe.jumpMessages.ToString();'
+        $loaded = Exec 'return InputProbe.LoadOverrides();'
+        Add-Result inputsystem 'Rebinding: PerformInteractiveRebinding takes the next key (K) for the Keyboard&Mouse binding; K jumps and Space does not; SaveBindingOverridesAsJson · RemoveAll (Space again) · LoadBindingOverridesFromJson (K again)' ($rb.display -match '^K' -and [int]$c1 -eq [int]$c0 + 1 -and $saved -match '<Keyboard>/k' -and [int]$c2 -eq [int]$c1 + 1 -and $loaded -match '^K') ("display '{0}', K → +{1}, Space → +0, saved {2}, after RemoveAll Space → +{3}, loaded '{4}'" -f $rb.display, ([int]$c1 - [int]$c0), $saved, ([int]$c2 - [int]$c1), $loaded)
+
+        # ---- 프로젝트 동작 · 설정, 코드로 만든 동작 (처리기 · 가상 장치), 옛 Input 게임패드
+        $pw = Exec 'var a = NovaEngine.InputSystem.InputSystem.actions; return (a != null) + " " + (a != null && a["Player/Jump"].enabled) + " " + NovaEngine.InputSystem.InputSystem.settings.defaultHoldTime.ToString(System.Globalization.CultureInfo.InvariantCulture);'
+        $code = Exec 'return InputProbe.CodeActions();'
+        $la0 = [int](Exec 'return InputProbe.legacyA.ToString();')
+        Invoke-Nova 'input gamepad --leftStick 1,0' | Out-Null
+        Invoke-Nova 'input gamepad --button a --tap' | Out-Null
+        Wait-Sec 0.15
+        $leg = Exec 'return InputProbe.Legacy();'
+        Invoke-Nova 'input gamepad --leftStick 0,0' | Out-Null
+        Add-Result inputsystem 'InputSystem.actions = project-wide asset (enabled), InputSystem.settings from Project Settings (defaultHoldTime 0.35)' ($pw -eq 'True True 0.35') $pw
+        Add-Result inputsystem 'Actions from code (Unity API): AddBinding + processors (invertVector2 · scaleVector2 on top of the stick dead zone), AddCompositeBinding, virtual Gamepad via AddDevice + QueueStateEvent, ReadValue<float> on a Vector2 throws' ($code -eq '1.279,-1.279 RS | I/J/K/L True') $code
+        Add-Result inputsystem 'Legacy Input sees the gamepad too: GetAxisRaw("Horizontal") = left stick, KeyCode.JoystickButton0 = A, GetJoystickNames' ($leg -match ('^1 ' + ($la0 + 1) + ' ')) ("{0} (A presses before {1})" -f $leg, $la0)
+
+        # ---- Unity 6 기본 파일 (그대로 읽기)
+        if (Test-Path $unityCopy)
+        {
+            $u = Exec ('return InputProbe.UnityDefault(@"' + $unityCopy + '");')
+            Add-Result inputsystem 'Unity 6 default InputSystem_Actions.inputactions loads as is: Player 9 · UI 10 actions, 5 schemes, Move resolves keyboard + gamepad controls, Interact keeps Hold' ($u -match '^9 10 5 (\d+) W\|Up Arrow/A\|Left Arrow/S\|Down Arrow/D\|Right Arrow Hold$' -and [int]([regex]::Match($u, '^9 10 5 (\d+)').Groups[1].Value) -ge 9) $u
+        }
+        Invoke-Nova 'input release' | Out-Null
+        Invoke-Nova 'stop' | Out-Null
+        $after = Exec 'return NovaEngine.InputSystem.InputSystem.ListEnabledActions().Count.ToString();'
+        Add-Result inputsystem 'Stopping Play disables every action and resets the session' ($after -eq '0' -or $after -eq '(exec failed)') "enabled actions after Stop: $after"
+    }
+    finally
+    {
+        Invoke-Nova 'inputactions project-wide --clear' | Out-Null
+        Invoke-Nova 'inputactions settings --defaultHoldTime 0.4' | Out-Null
+        Stop-TestEditor $ed | Out-Null
+    }
+}
+
 function Capture-Scenes([switch]$OpenGL, [switch]$Vulkan, [switch]$D3D12, [string]$dir)
 {
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -11161,6 +11448,7 @@ try
                 'burst' { Suite-Burst }
                 'enginejobs' { Suite-EngineJobs }
                 'burstnative' { Suite-BurstNative }
+                'inputsystem' { Suite-InputSystem }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }

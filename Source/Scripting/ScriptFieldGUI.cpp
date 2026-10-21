@@ -6,6 +6,7 @@
 #include "AudioClip.h"
 #include "AudioManager.h"
 #include "SelectionManager.h"
+#include "InputActionsAsset.h"
 #include <filesystem>
 
 using json = nlohmann::json;
@@ -70,6 +71,141 @@ namespace
 	}
 
 	bool Value(const ScriptEngine::FieldInfo& f, json& v, const char* label, const std::string& key, int indent);
+
+	// InputActionReference: {asset, action} — 모든 .inputactions 의 동작 목록에서 고른다 (Unity 의 동작 고르기 창)
+	bool ActionReferenceField(const char* label, json& v, int indent)
+	{
+		bool changed = false;
+		const std::string asset = v.is_object() ? v.value("asset", std::string()) : std::string();
+		const std::string id = v.is_object() ? v.value("action", std::string()) : std::string();
+		std::string text = "None (Input Action Reference)";
+		if (!asset.empty())
+		{
+			InputActions::Asset a;
+			const InputActions::Map* map = nullptr;
+			const InputActions::Action* act = a.Load(asset) ? a.FindAction(id, &map) : nullptr;
+			const std::string stem = wstring_to_string(std::filesystem::path(string_to_wstring(asset)).stem().wstring());
+			text = act && map ? stem + "/" + map->Name + "/" + act->Name : "Missing (Input Action Reference)";
+		}
+		ImVec2 fmin, fmax;
+		const int pressed = UnityGUI::ObjectFieldButtons(label, text.c_str(), "input_actions", nullptr, 0, &fmin, &fmax, indent);
+		const ImVec2 after = ImGui::GetCursorScreenPos();
+		if (pressed == -1)
+			ImGui::OpenPopup("##actionref");
+		ImGui::SetNextWindowSizeConstraints(ImVec2(260, 0), ImVec2(520, 420));
+		if (ImGui::BeginPopup("##actionref"))
+		{
+			if (ImGui::Selectable("None"))
+			{
+				v = nullptr;
+				changed = true;
+			}
+			for (const std::string& path : InputActions::FindAll())
+			{
+				InputActions::Asset a;
+				if (!a.Load(path))
+					continue;
+				const std::string stem = wstring_to_string(std::filesystem::path(string_to_wstring(path)).stem().wstring());
+				ImGui::TextDisabled("%s", stem.c_str());
+				for (const auto& m : a.Maps)
+					for (const auto& act : m.Actions)
+					{
+						const std::string item = "  " + m.Name + "/" + act.Name + "##" + path + act.Id;
+						if (ImGui::Selectable(item.c_str(), asset == path && id == act.Id))
+						{
+							v = { { "asset", path }, { "action", act.Id } };
+							changed = true;
+						}
+					}
+			}
+			ImGui::EndPopup();
+		}
+		ImGui::SetCursorScreenPos(fmin);
+		ImGui::InvisibleButton("##refdrop", ImVec2((std::max)(1.0f, fmax.x - fmin.x - 22.0f), fmax.y - fmin.y));
+		if (ImGui::BeginDragDropTarget())
+		{
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_FILE"))
+			{
+				const std::string dropped(static_cast<const char*>(payload->Data));
+				InputActions::Asset a;
+				if (InputActions::IsInputActionsPath(dropped) && a.Load(dropped) && !a.Maps.empty() && !a.Maps[0].Actions.empty())
+				{
+					v = { { "asset", dropped }, { "action", a.Maps[0].Actions[0].Id } };
+					changed = true;
+				}
+			}
+			ImGui::EndDragDropTarget();
+		}
+		ImGui::SetCursorScreenPos(after);
+		return changed;
+	}
+
+	// InputAction (스크립트 안에 둔 동작): 이름 · 형식 · 바인딩 목록 (경로 글자 — 합성은 Input Actions 에셋에서)
+	bool InputActionField(const char* label, json& v, int indent)
+	{
+		if (!v.is_object())
+			v = { { "name", label }, { "type", "Button" }, { "id", InputActions::NewGuid() }, { "expectedControlType", "Button" }, { "processors", "" }, { "interactions", "" }, { "initialStateCheck", false }, { "bindings", json::array() } };
+		bool changed = false;
+		json& binds = v["bindings"];
+		if (!binds.is_array())
+			binds = json::array();
+		std::string summary;
+		for (const json& b : binds)
+			if (!b.value("isPartOfComposite", false))
+				summary += (summary.empty() ? "" : ", ") + InputActions::DisplayPath(b.value("path", std::string()), false);
+		const std::string title = std::string(label) + (summary.empty() ? "" : "  (" + summary + ")");
+		if (!UnityGUI::FoldoutPlain(title.c_str(), indent, false))
+			return false;
+		static const char* kTypes[] = { "Value", "Button", "Pass Through" };
+		const std::string type = v.value("type", std::string("Button"));
+		int t = type == "Value" ? 0 : (type == "PassThrough" ? 2 : 1);
+		if (UnityGUI::Dropdown("Action Type", &t, kTypes, 3, indent + 1))
+		{
+			v["type"] = t == 0 ? "Value" : (t == 2 ? "PassThrough" : "Button");
+			if (t == 1) v["expectedControlType"] = "Button";
+			changed = true;
+		}
+		if (t != 1)
+		{
+			std::string control = v.value("expectedControlType", std::string());
+			if (UnityGUI::TextField("Control Type", &control, indent + 1)) { v["expectedControlType"] = control; changed = true; }
+		}
+		int remove = -1;
+		for (size_t i = 0; i < binds.size(); ++i)
+		{
+			ImGui::PushID((int)i);
+			json& b = binds[i];
+			std::string path = b.value("path", std::string());
+			const std::string rowLabel = b.value("isPartOfComposite", false) ? "  " + b.value("name", std::string()) : (b.value("isComposite", false) ? "Composite" : "Binding " + std::to_string(i));
+			if (UnityGUI::TextField(rowLabel.c_str(), &path, indent + 1)) { b["path"] = path; changed = true; }
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", InputActions::DisplayPath(path).c_str());
+			ImGui::SameLine();
+			if (ImGui::SmallButton("-")) remove = (int)i;
+			ImGui::PopID();
+		}
+		if (remove >= 0)
+		{
+			// 합성이면 부분도
+			const bool composite = binds[(size_t)remove].value("isComposite", false);
+			binds.erase((size_t)remove);
+			while (composite && (size_t)remove < binds.size() && binds[(size_t)remove].value("isPartOfComposite", false))
+				binds.erase((size_t)remove);
+			changed = true;
+		}
+		bool plus = false, minus = false;
+		UnityGUI::PlusMinus(&plus, &minus);
+		if (plus)
+		{
+			binds.push_back({ { "name", "" }, { "id", InputActions::NewGuid() }, { "path", "" }, { "interactions", "" }, { "processors", "" }, { "groups", "" }, { "isComposite", false }, { "isPartOfComposite", false } });
+			changed = true;
+		}
+		if (minus && !binds.empty()) { binds.erase(binds.size() - 1); changed = true; }
+		std::string inter = v.value("interactions", std::string()), proc = v.value("processors", std::string());
+		if (UnityGUI::TextField("Interactions", &inter, indent + 1)) { v["interactions"] = inter; changed = true; }
+		if (UnityGUI::TextField("Processors", &proc, indent + 1)) { v["processors"] = proc; changed = true; }
+		return changed;
+	}
 
 	bool ArrayField(const ScriptEngine::FieldInfo& f, json& v, const char* label, const std::string& key, int indent)
 	{
@@ -237,6 +373,17 @@ namespace
 				[](const std::string& p) { return AudioClip::IsAudioPath(p); },
 				[](const std::string& p) { AudioManager::PlayPreview(AudioClip::Load(p)); }, indent);
 		}
+		else if (f.Type == "InputActionAsset")
+		{
+			changed = AssetRefField(label, v, key, "input_actions", "InputActionAsset",
+				[]() { return InputActions::FindAll(); },
+				[](const std::string& p) { return InputActions::IsInputActionsPath(p); },
+				nullptr, indent);
+		}
+		else if (f.Type == "InputActionReference")
+			changed = ActionReferenceField(label, v, indent);
+		else if (f.Type == "InputAction")
+			changed = InputActionField(label, v, indent);
 		else if (f.Type == "ScriptableObject")
 		{
 			const std::string base = f.TypeFullName.empty() ? f.TypeName : f.TypeFullName;

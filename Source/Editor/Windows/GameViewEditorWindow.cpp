@@ -9,6 +9,7 @@
 #include "AnimationPlayer.h"
 #include "AudioManager.h"
 #include "UISystem.h"
+#include "InputDevices.h"
 #include <fstream>
 
 namespace
@@ -252,6 +253,7 @@ void GameViewEditorWindow::SetPlayerView(int width, int height, bool focused)
 	s_GameH = height;
 	s_InputFocus = focused;
 	s_Scroll = focused ? ImGui::GetIO().MouseWheel : 0.0f;
+	InputDevices::ApplyCursorStyle(focused);
 }
 float GameViewEditorWindow::ScrollDelta() { return s_Scroll; }
 
@@ -308,6 +310,11 @@ void GameViewEditorWindow::DrawContent()
 	const ImVec2 viewPos(pos.x, pos.y + kBarH);
 	const ImVec2 viewSize(avail.x, avail.y - kBarH);
 	DrawView(viewPos, viewSize);
+	// Cursor.lockState = Locked · Cursor.visible = false: Game 그림 위에서 커서를 숨긴다
+	{
+		const ImVec2 m = ImGui::GetIO().MousePos;
+		InputDevices::ApplyCursorStyle(m.x >= s_ImgMin.x && m.x <= s_ImgMax.x && m.y >= s_ImgMin.y && m.y <= s_ImgMax.y);
+	}
 	ImGui::SetCursorScreenPos(pos);
 	ImGui::Dummy(avail);
 }
