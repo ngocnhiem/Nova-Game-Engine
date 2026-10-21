@@ -367,6 +367,20 @@ GameObject* GameObjectFactory::CreateSpotLight(const std::string& name)
 	return obj;
 }
 
+GameObject* GameObjectFactory::CreateAreaLight(const std::string& name, bool disc)
+{
+	GameObject* obj = new GameObject(name);
+	auto light = obj->AddComponent<Light>();
+	AreaLightDesc d;
+	d.Diffuse = XMFLOAT4(1.0f, 0.95f, 0.85f, 1.0f);
+	d.Range = 10.0f;
+	d.Size = disc ? XMFLOAT2(0.5f, 0.5f) : XMFLOAT2(1.0f, 1.0f);
+	light->SetAreaLight(disc ? LightType::Disc : LightType::Rectangle, d);
+	obj->GetTransform()->SetLocalPosition(Vec3(0.0f, 3.0f, 0.0f));
+	obj->GetTransform()->SetLocalEulerAngles(Vec3(90.0f, 0.0f, 0.0f));   // forward = 아래
+	return obj;
+}
+
 GameObject* GameObjectFactory::CreateCamera(const std::string& name)
 {
 	GameObject* obj = new GameObject(name);

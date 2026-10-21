@@ -36,7 +36,7 @@ if (-not $Out)
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
+$suites = if ($Only.Count) { $Only } else { @('cli', 'physics', 'animation', 'animlayers', 'timeline', 'scriptable', 'renderscale', 'arealight', 'import', 'ui', 'packages', 'model', 'anim2d', 'tilemap', 'layers', 'sprites', 'physics2d', 'shadergraph', 'decal', 'reflectionprobe', 'probevolume', 'depthoffield', 'lodgroup', 'occlusion', 'occlusiongl', 'occlusionvk', 'linetrail', 'material', 'vfx', 'vfxgl', 'vfxvk', 'weather', 'tessellation', 'ssr', 'ssao', 'motionvectors', 'cinemachine', 'renderingdebug', 'forwardplus', 'rendergraph', 'modelplace', 'antialiasing', 'audio', 'web', 'scenes', 'tween', 'light2d', 'nav2d', 'ragdoll', 'wheel', 'daynight', 'cloth', 'clothskin', 'starter', 'behaviour', 'recovery', 'render', 'gfx', 'vulkan', 'd3d12', 'vfx12', 'virtualtexture', 'deferred', 'jobs', 'physicsasync', 'physicssync', 'blockout', 'renderthread', 'memory', 'transform', 'streaming', 'crowd', 'pcg', 'postfx', 'terraingraph', 'plants', 'building') + $(if ($Suite -eq 'full') { @('perf', 'particles') } else { @() }) + $(if ($Interactive) { @('keys') } else { @() }) }
 Write-Host "NOVA tests: $($suites -join ', ')  (project $Project, out $Out)"
 Backup-Layout
 
@@ -6601,6 +6601,150 @@ public static class NovaEdgeSharp
     }
 }
 
+# 면광 (HDRP 식 실시간 Rectangle · Disc, LTC): 위에서 내려다본 바닥의 밝기 (빛 켬 − 끔)
+function Suite-AreaLight
+{
+    Write-Host '[arealight]'
+    Add-Type -AssemblyName System.Drawing
+    if (-not ('NovaPatchMean' -as [type]))
+    {
+        Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+using System; using System.Drawing; using System.Drawing.Imaging; using System.Runtime.InteropServices;
+public static class NovaPatchMean
+{
+    // (cx, cy) 둘레 (2r+1)² 칸의 밝기 평균 (R+G+B)/3
+    public static double Mean(string path, int cx, int cy, int r)
+    {
+        using (var bmp = new Bitmap(path))
+        {
+            var d = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var b = new byte[d.Stride * bmp.Height];
+            Marshal.Copy(d.Scan0, b, 0, b.Length);
+            bmp.UnlockBits(d);
+            double s = 0; int n = 0;
+            for (int y = Math.Max(0, cy - r); y <= Math.Min(bmp.Height - 1, cy + r); y++)
+                for (int x = Math.Max(0, cx - r); x <= Math.Min(bmp.Width - 1, cx + r); x++)
+                { int i = y * d.Stride + x * 4; s += (b[i] + b[i + 1] + b[i + 2]) / 3.0; n++; }
+            return n > 0 ? s / n : 0;
+        }
+    }
+}
+"@
+    }
+    $camH = 8.0
+    # 위에서 내려다본 카메라 (높이 camH, 아래를 봄, 화면 위 = +Z, 오른쪽 = +X, 세로 시야 60°)
+    function Px([double]$x, [double]$z, [int]$w, [int]$h)
+    {
+        $t = [math]::Tan(30.0 * [math]::PI / 180.0); $aspect = $w / [double]$h
+        @([int]((0.5 + 0.5 * $x / ($camH * $t * $aspect)) * $w), [int]((0.5 - 0.5 * $z / ($camH * $t)) * $h))
+    }
+    $script:alShot = 0
+    function Shot
+    {
+        $script:alShot++
+        $path = Join-Path $Out ("arealight_{0}.png" -f $script:alShot)
+        Invoke-Nova 'wait 6' | Out-Null
+        # OpenGL 처음 실행: 셰이더 변환 동안 편집기가 늦게 답한다 — 찍힐 때까지 (최대 10 분)
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        do { $r = Invoke-NovaJson ('screenshot "' + $path + '" --view game'); if (-not $r) { Start-Sleep -Milliseconds 2000 } } while (-not $r -and $sw.Elapsed.TotalSeconds -lt 600)
+        @{ Path = $path; W = $r.width; H = $r.height }
+    }
+    # 두 장의 밝기 차 (켬 − 끔) 를 바닥 점 (x, z) 에서
+    function Delta($on, $off, [double]$x, [double]$z)
+    {
+        $p = Px $x $z $on.W $on.H
+        [NovaPatchMean]::Mean($on.Path, $p[0], $p[1], 3) - [NovaPatchMean]::Mean($off.Path, $p[0], $p[1], 3)
+    }
+    function SetL([string]$json) { Invoke-Nova ('set Panel --component Light --values "' + ($json -replace '"', '\"') + '"') | Out-Null }
+
+    $ed = Start-TestEditor
+    try
+    {
+        Invoke-Nova 'scene new --force' | Out-Null
+        Invoke-Nova 'create plane --name Ground --scale 4,1,4' | Out-Null
+        Invoke-Nova 'set "Directional Light" --component Light --values "{\"intensity\":0}"' | Out-Null
+        Invoke-Nova "set ""Main Camera"" --position 0,$camH,0 --rotation 90,0,0" | Out-Null
+        Invoke-Nova 'create area-light --name Panel --position 0,1,0' | Out-Null
+        Invoke-Nova 'window game' | Out-Null
+        # 가로로 긴 사각형 (3 x 0.3 m), 높이 1 m, 범위 3 m
+        SetL '{"areaLightSize":[3,0.3],"intensity":0,"areaLightRange":3}'
+        $off = Shot
+        SetL '{"intensity":1}'
+        $rect = Shot
+        $c = Delta $rect $off 0 0; $ax = Delta $rect $off 1.4 0; $az = Delta $rect $off 0 1.4; $far = Delta $rect $off 4.5 0
+        Add-Result arealight 'Rectangle lights the floor below it, out to its range only' ($c -gt 15 -and $far -lt 2) ("center +{0:F1}, 4.5 m (range 3 + 1.5 half width) +{1:F1}" -f $c, $far)
+        Add-Result arealight 'Rectangle 3 x 0.3 m: the light spreads along its long side (X) more than across (Z)' ($ax -gt $az * 1.8 -and $ax -gt 4 -and $c -lt 100) ("1.4 m along X +{0:F1}, 1.4 m along Z +{1:F1}" -f $ax, $az)
+        Invoke-Nova 'set Panel --rotation 270,0,0' | Out-Null
+        $up = Shot
+        $cu = Delta $up $off 0 0
+        Add-Result arealight 'one-sided: facing up, the floor below stays dark' ($cu -lt 2) ("center +{0:F1} (facing down +{1:F1})" -f $cu, $c)
+        Invoke-Nova 'set Panel --rotation 90,0,0' | Out-Null
+
+        # 크기를 바꿔도 전체 밝기 (Intensity) 는 같다 — 멀리 (4 m 아래) 에서 거의 같은 밝기
+        Invoke-Nova 'set Panel --position 0,4,0' | Out-Null
+        SetL '{"areaLightSize":[0.4,0.4],"intensity":3,"areaLightRange":12}'
+        $small = Shot
+        SetL '{"areaLightSize":[0.8,0.8]}'
+        $big = Shot
+        $ds = Delta $small $off 0 0; $db = Delta $big $off 0 0
+        Add-Result arealight 'Intensity is the light power: doubling the size keeps the far floor about as bright' ($ds -gt 8 -and [math]::Abs($db - $ds) / $ds -lt 0.15) ("0.4 m +{0:F1}, 0.8 m +{1:F1}" -f $ds, $db)
+
+        # Disc: 둥글게 (X · Z 같은 퍼짐)
+        Invoke-Nova 'set Panel --position 0,1,0' | Out-Null
+        SetL '{"lightType":4,"areaLightSize":[0.5,0.5],"intensity":1,"areaLightRange":4}'
+        $disc = Shot
+        $dc = Delta $disc $off 0 0; $dx = Delta $disc $off 1.2 0; $dz = Delta $disc $off 0 1.2
+        Add-Result arealight 'Disc lights a round patch (same spread along X and Z)' ($dc -gt 15 -and $dx -gt 3 -and [math]::Abs($dx - $dz) / [math]::Max($dx, $dz) -lt 0.2) ("center +{0:F1}, 1.2 m X +{1:F1}, Z +{2:F1}" -f $dc, $dx, $dz)
+
+        # Deferred 도 같은 빛 (G-버퍼 → 같은 ShadeLit)
+        Invoke-Nova 'renderpath set --path Deferred' | Out-Null
+        $def = Shot
+        Invoke-Nova 'renderpath set --path Forward+' | Out-Null
+        $dd = Delta $def $off 0 0
+        Add-Result arealight 'Deferred rendering path: the same area light' ([math]::Abs($dd - $dc) / $dc -lt 0.12) ("Forward+ +{0:F1}, Deferred +{1:F1}" -f $dc, $dd)
+
+        # 저장 값 · C# (Light.type · areaSize)
+        $j = Invoke-NovaJson 'get Panel --component Light'
+        Add-Result arealight 'saved as lightType 4 (Disc) with areaLightSize · areaLightRange' ($j.lightType -eq 4 -and $j.areaLightSize[0] -eq 0.5 -and $j.areaLightRange -eq 4) ("lightType {0}, size {1}, range {2}" -f $j.lightType, ($j.areaLightSize -join ' x '), $j.areaLightRange)
+        Invoke-Nova 'play' | Out-Null
+        Invoke-Nova 'wait 5' | Out-Null
+        $cs = Join-Path $Out 'arealight.cs'
+        'var l = GameObject.Find("Panel").GetComponent<Light>(); var t0 = l.type; l.areaSize = new Vector2(2f, 1f); var inv = System.Globalization.CultureInfo.InvariantCulture; return t0 + " " + l.areaSize.x.ToString("F1", inv) + " " + l.areaSize.y.ToString("F1", inv);' | Set-Content -Encoding utf8 $cs
+        $cr = "$((Invoke-NovaJson "exec --file $cs").result)"
+        Invoke-Nova 'stop' | Out-Null
+        Add-Result arealight 'C#: Light.type = Disc, Light.areaSize settable' ($cr -eq 'Disc 2.0 1.0') $cr
+        $fp = Invoke-NovaJson 'forwardplus info'
+        Add-Result arealight 'Forward+ info counts area lights' ($fp.areaLights -ge 1) ("areaLights {0}" -f $fp.areaLights)
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+
+    # OpenGL: 같은 셰이더 (DXC → GLSL) 로 면광
+    $ed = Start-TestEditor -OpenGL
+    try
+    {
+        Invoke-Nova 'scene new --force' | Out-Null
+        Invoke-Nova 'create plane --name Ground --scale 4,1,4' | Out-Null
+        Invoke-Nova 'set "Directional Light" --component Light --values "{\"intensity\":0}"' | Out-Null
+        Invoke-Nova "set ""Main Camera"" --position 0,$camH,0 --rotation 90,0,0" | Out-Null
+        Invoke-Nova 'create area-light --name Panel --position 0,1,0' | Out-Null
+        Invoke-Nova 'window game' | Out-Null
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while ($sw.Elapsed.TotalSeconds -lt 600)
+        {
+            $t = Invoke-Nova 'log -n 2000'
+            if ($t -match '(compiled|cache hit) 32\. InstancedBasic') { break }
+            Start-Sleep -Milliseconds 1000
+        }
+        SetL '{"areaLightSize":[3,0.3],"intensity":0,"areaLightRange":3}'
+        $glOff = Shot
+        SetL '{"intensity":1}'
+        $glOn = Shot
+        $gc = Delta $glOn $glOff 0 0; $gx = Delta $glOn $glOff 1.4 0; $gz = Delta $glOn $glOff 0 1.4
+        Add-Result arealight 'OpenGL: the same rectangle light (cross-compiled LTC)' ($gc -gt 15 -and $gx -gt $gz * 1.8) ("center +{0:F1}, X +{1:F1}, Z +{2:F1}" -f $gc, $gx, $gz)
+    }
+    finally { Stop-TestEditor $ed | Out-Null }
+}
+
 function Capture-Scenes([switch]$OpenGL, [switch]$Vulkan, [switch]$D3D12, [string]$dir)
 {
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -9230,6 +9374,7 @@ try
                 'timeline' { Suite-Timeline }
                 'scriptable' { Suite-Scriptable }
                 'renderscale' { Suite-RenderScale }
+                'arealight' { Suite-AreaLight }
                 'import' { Suite-Import }
                 'ui' { Suite-UI }
                 'packages' { Suite-Packages }

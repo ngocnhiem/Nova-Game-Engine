@@ -2,11 +2,23 @@
 #include "Component.h"
 #include "LightHelper.h"
 
+// 면광 (Rectangle · Disc — HDRP 식 실시간, LTC): 빛은 Transform 의 forward 쪽 반구로만 나간다. 그림자 없음
+struct AreaLightDesc
+{
+	XMFLOAT4 Diffuse = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+	float Range = 10.0f;                         // 이 거리 (빛 면의 가장 가까운 점에서) 에서 0 으로
+	XMFLOAT2 Size = XMFLOAT2(1.0f, 1.0f);        // Rectangle: 가로 · 세로 (m), Disc: x = 반지름
+	// ViewUpdate 가 Transform 에서 채운다
+	XMFLOAT3 Position = XMFLOAT3(0, 0, 0);
+	XMFLOAT3 Right = XMFLOAT3(1, 0, 0), Up = XMFLOAT3(0, 1, 0), Forward = XMFLOAT3(0, 0, 1);
+};
+
 class Light
 	: public Component
 {
 private:
 	LightType m_LightType = LightType::Directional;
+	AreaLightDesc m_AreaDesc;
 
 	// ������ ������ �ִ� ����ü ������ Transform�̶� �����ؾ��ұ�?
 	DirectionalLight m_DirectionalDesc;
@@ -77,6 +89,12 @@ public:
 	DirectionalLight GetDirLight() { DirectionalLight d = m_DirectionalDesc; ApplyIntensity(d.Diffuse); ApplyIntensity(d.Specular); return d; }
 	PointLight GetPointLight() { PointLight d = m_PointDesc; ApplyIntensity(d.Diffuse); ApplyIntensity(d.Specular); return d; }
 	SpotLight GetSpotLight() { SpotLight d = m_SpotDesc; ApplyIntensity(d.Diffuse); ApplyIntensity(d.Specular); return d; }
+	AreaLightDesc GetAreaLight() { AreaLightDesc d = m_AreaDesc; ApplyIntensity(d.Diffuse); return d; }
+	bool IsAreaLight() const { return m_LightType == LightType::Rectangle || m_LightType == LightType::Disc; }
+	// Unity Light.areaSize (Rectangle: 가로 · 세로, Disc: x = 반지름)
+	XMFLOAT2 GetAreaSize() const { return m_AreaDesc.Size; }
+	void SetAreaSize(const XMFLOAT2& s) { m_AreaDesc.Size = XMFLOAT2((std::max)(s.x, 0.01f), (std::max)(s.y, 0.01f)); }
+	void SetAreaLight(LightType type, const AreaLightDesc& d) { m_LightType = type; m_AreaDesc = d; }
 
 	float GetRange();
 	// C# Light.intensity · color · shadowStrength (스크립트 · 트윈)

@@ -14,10 +14,12 @@ struct AdditionalLight
 	Vec3 Position;
 	float Range = 0.0f;
 	Vec3 Color;              // Diffuse (감마, 세기 곱함 — 셰이더가 선형으로)
-	int Type = 0;            // 0 점광, 1 스포트광
+	int Type = 0;            // 0 점광, 1 스포트광, 2 Rectangle, 3 Disc (면광 — 늘 여기로, 그림자 없음)
 	Vec3 Direction;
 	float SpotAngle = 0.0f;  // 원뿔 전체 각 (도)
 	uint32 Mask = 0xFFFFFFFFu;   // Light.cullingMask
+	// 면광: 반 크기만큼의 축 (AxisX = right × 반 가로, AxisY = −up × 반 세로 — AxisX × AxisY 가 빛이 나가는 반대쪽, LTC 의 꼭짓점 순서)
+	Vec3 AxisX, AxisY;
 };
 constexpr int kMaxAdditionalLights = 1024;
 

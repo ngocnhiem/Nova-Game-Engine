@@ -32,6 +32,22 @@ namespace
 				a.Direction = Vec3(d.Direction.x, d.Direction.y, d.Direction.z);
 				a.SpotAngle = d.Spot;
 			}
+			else if (l->IsAreaLight())
+			{
+				// 면광 (Rectangle · Disc): 원판은 넓이가 같은 정팔각형으로 (셰이더가 꼭짓점 8 개로 적분)
+				const AreaLightDesc d = l->GetAreaLight();
+				const bool disc = l->GetLightType() == LightType::Disc;
+				constexpr float kOctagonToDisc = 1.05390581f;   // sqrt(π / (2√2)): 넓이가 π r² 인 정팔각형의 외접 반지름 / r
+				const float hx = disc ? d.Size.x * kOctagonToDisc : d.Size.x * 0.5f;
+				const float hy = disc ? d.Size.x * kOctagonToDisc : d.Size.y * 0.5f;
+				a.Position = Vec3(d.Position.x, d.Position.y, d.Position.z);
+				a.Range = d.Range;
+				a.Color = Vec3(d.Diffuse.x, d.Diffuse.y, d.Diffuse.z);
+				a.Type = disc ? 3 : 2;
+				a.Direction = Vec3(d.Forward.x, d.Forward.y, d.Forward.z);
+				a.AxisX = Vec3(d.Right.x, d.Right.y, d.Right.z) * hx;
+				a.AxisY = Vec3(d.Up.x, d.Up.y, d.Up.z) * -hy;
+			}
 			else
 				continue;
 			out.push_back(a);
@@ -42,7 +58,17 @@ namespace
 	{
 		vector<shared_ptr<Light>> out;
 		for (const auto& l : lights)
-			if (LightType::Directional != l->GetLightType())
+			if (LightType::Directional != l->GetLightType() && !l->IsAreaLight())
+				out.push_back(l);
+		return out;
+	}
+
+	// 면광은 그림자 칸 (LIGHT_SIZE) 을 쓰지 않고 늘 클러스터 빛으로 (Forward+ · Deferred)
+	vector<shared_ptr<Light>> AreaLights(const vector<shared_ptr<Light>>& lights)
+	{
+		vector<shared_ptr<Light>> out;
+		for (const auto& l : lights)
+			if (l->IsAreaLight())
 				out.push_back(l);
 		return out;
 	}
@@ -93,6 +119,10 @@ void LightManager::EditorViewUpdates()
 
 void LightManager::SortingLights(vector<shared_ptr<Light>> cullingLights, Vec3 cameraPos)
 {
+	// 면광 (Rectangle · Disc) 은 그림자 · 종류별 배열 밖 — 마지막에 클러스터 빛으로
+	const vector<shared_ptr<Light>> areaLights = AreaLights(cullingLights);
+	cullingLights.erase(std::remove_if(cullingLights.begin(), cullingLights.end(), [](const shared_ptr<Light>& l) { return l->IsAreaLight(); }), cullingLights.end());
+
 	m_DirLights.clear();
 	m_PointLights.clear();
 	m_SpotLights.clear();
@@ -117,6 +147,7 @@ void LightManager::SortingLights(vector<shared_ptr<Light>> cullingLights, Vec3 c
 			m_DirLights.push_back(light->GetDirLight());
 		}
 		ToAdditional(NonDirectional(cullingLights), 0, m_AdditionalLights);   // 방향광으로 다 찼다: 점광 · 스포트광은 모두 클러스터로
+		ToAdditional(areaLights, 0, m_AdditionalLights);
 		return;
 	}
 
@@ -193,10 +224,15 @@ void LightManager::SortingLights(vector<shared_ptr<Light>> cullingLights, Vec3 c
 	}
 
 	m_SortedLightSize = m_SortedLights.size();
+	ToAdditional(areaLights, 0, m_AdditionalLights);
 }
 
 void LightManager::SortingEditorLights(vector<shared_ptr<Light>> cullingLights, Vec3 cameraPos)
 {
+	// 면광 (Rectangle · Disc) 은 그림자 · 종류별 배열 밖 — 마지막에 클러스터 빛으로
+	const vector<shared_ptr<Light>> areaLights = AreaLights(cullingLights);
+	cullingLights.erase(std::remove_if(cullingLights.begin(), cullingLights.end(), [](const shared_ptr<Light>& l) { return l->IsAreaLight(); }), cullingLights.end());
+
 	m_EditorDirLights.clear();
 	m_EditorPointLights.clear();
 	m_EditorSpotLights.clear();
@@ -221,6 +257,7 @@ void LightManager::SortingEditorLights(vector<shared_ptr<Light>> cullingLights, 
 			m_EditorDirLights.push_back(light->GetDirLight());
 		}
 		ToAdditional(NonDirectional(cullingLights), 0, m_EditorAdditionalLights);
+		ToAdditional(areaLights, 0, m_EditorAdditionalLights);
 		return;
 	}
 
@@ -297,6 +334,7 @@ void LightManager::SortingEditorLights(vector<shared_ptr<Light>> cullingLights, 
 	}
 
 	m_SortedEditorLightSize = m_SortedEditorLights.size();
+	ToAdditional(areaLights, 0, m_EditorAdditionalLights);
 }
 
 bool LightManager::IsLit(const shared_ptr<Light>& light)

@@ -286,7 +286,7 @@ namespace NovaEngine.Interop
         // Camera · Light 값
         public delegate* unmanaged<ulong, int, float> Cam_GetFloat;             // 0 fieldOfView, 1 near, 2 far, 3 orthographicSize, 4 aspect, 5 orthographic
         public delegate* unmanaged<ulong, int, float, void> Cam_SetFloat;
-        public delegate* unmanaged<ulong, int, float> Light_GetFloat;           // 0 intensity, 1 shadowStrength, 2 range, 3 spotAngle
+        public delegate* unmanaged<ulong, int, float> Light_GetFloat;           // 0 intensity, 1 shadowStrength, 2 range, 3 spotAngle, 4 · 5 areaSize, 6 type
         public delegate* unmanaged<ulong, int, float, void> Light_SetFloat;
         public delegate* unmanaged<ulong, Vector4*, void> Light_GetColor;
         public delegate* unmanaged<ulong, Vector4*, void> Light_SetColor;

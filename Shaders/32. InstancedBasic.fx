@@ -622,6 +622,113 @@ float RangeAttenuation(float d, float range)
 }
 
 // ---------------------------------------------------------------------------
+// 면광 (Rectangle · Disc — HDRP 식 실시간): Linearly Transformed Cosines (Heitz · Dupuy · Hill · Neubelt 2016, BSD)
+//  다각형 (사각형 4 · 원판 = 넓이가 같은 정팔각형 8) 을 GGX 로 바꾼 코사인 분포 공간에서 적분한다 (clipless — 구 적분 표로 지평선 처리)
+//  LTC 표 두 장은 클러스터 텍스처 24576 부터 (64 x 64, ltc_1 = Minv, ltc_2 = 노름 · 프레넬 · 0 · 구 적분)
+//  세기: 크기를 바꿔도 전체 밝기 같게 (같은 세기의 작은 점광을 마주 볼 때와 같은 밝기 — HDRP 의 루멘처럼)
+// ---------------------------------------------------------------------------
+float4 LtcTexel(uint table, float2 uv)
+{
+    float2 f = saturate(uv) * 63.0f;
+    int2 i0 = (int2)floor(f);
+    int2 i1 = min(i0 + 1, 63);
+    float2 t = f - (float2)i0;
+    uint base = 24576u + table * 4096u;
+    float4 a = ClusterTexel(base + (uint)(i0.y * 64 + i0.x));
+    float4 b = ClusterTexel(base + (uint)(i0.y * 64 + i1.x));
+    float4 c = ClusterTexel(base + (uint)(i1.y * 64 + i0.x));
+    float4 d = ClusterTexel(base + (uint)(i1.y * 64 + i1.x));
+    return lerp(lerp(a, b, t.x), lerp(c, d, t.x), t.y);
+}
+
+float3 LtcEdgeVec(float3 v1, float3 v2)
+{
+    float x = dot(v1, v2);
+    float y = abs(x);
+    float a = 0.8543985f + (0.4965155f + 0.0145206f * y) * y;
+    float b = 3.4175940f + (4.1616724f + y) * y;
+    float v = a / b;
+    float thetaSinTheta = (x > 0.0f) ? v : 0.5f * rsqrt(max(1.0f - x * x, 1e-7f)) - v;
+    return cross(v1, v2) * thetaSinTheta;
+}
+
+// 다각형 (꼭짓점 n 개 = 4 또는 8, 가운데 c + 축 ex · ey) 의 LTC 적분. behind = 빛의 뒤쪽 (한쪽 면만 비춘다 → 0)
+float LtcPolygon(float3x3 M, float3 P, float3 c, float3 ex, float3 ey, bool disc, bool behind)
+{
+    float3 vsum = float3(0.0f, 0.0f, 0.0f);
+    if (disc)
+    {
+        // 정팔각형: 각 −135° 부터 45° 씩 (사각형과 같은 돌림 방향)
+        static const float2 kOct[8] = { float2(-0.70710678f, -0.70710678f), float2(0.0f, -1.0f), float2(0.70710678f, -0.70710678f), float2(1.0f, 0.0f),
+                                        float2(0.70710678f, 0.70710678f), float2(0.0f, 1.0f), float2(-0.70710678f, 0.70710678f), float2(-1.0f, 0.0f) };
+        float3 first = normalize(mul(M, c + ex * kOct[0].x + ey * kOct[0].y - P));
+        float3 prev = first;
+        [unroll]
+        for (int k = 1; k < 8; ++k)
+        {
+            float3 cur = normalize(mul(M, c + ex * kOct[k].x + ey * kOct[k].y - P));
+            vsum += LtcEdgeVec(prev, cur);
+            prev = cur;
+        }
+        vsum += LtcEdgeVec(prev, first);
+    }
+    else
+    {
+        float3 L0 = normalize(mul(M, c - ex - ey - P));
+        float3 L1 = normalize(mul(M, c + ex - ey - P));
+        float3 L2 = normalize(mul(M, c + ex + ey - P));
+        float3 L3 = normalize(mul(M, c - ex + ey - P));
+        vsum = LtcEdgeVec(L0, L1) + LtcEdgeVec(L1, L2) + LtcEdgeVec(L2, L3) + LtcEdgeVec(L3, L0);
+    }
+    float len = length(vsum);
+    float z = vsum.z / max(len, 1e-7f);
+    float scale = LtcTexel(1u, float2(z * 0.5f + 0.5f, len)).w;   // 지평선 아래로 잘리는 몫 (구 적분 표)
+    return (behind || len < 1e-7f) ? 0.0f : len * scale;
+}
+
+float3 ShadeAreaLight(float3 posW, float3 N, float3 V, float3 diffuse, float3 specular, float perceptualRoughness, bool highlights,
+                      float3 c, float3 ex, float3 ey, bool disc, float range, float3 lightColor)
+{
+    float3 result = float3(0.0f, 0.0f, 0.0f);
+    // 빛이 나가는 쪽 = −(ex × ey). 점이 반대쪽이면 0
+    float3 nPoly = cross(ex, ey);
+    // 범위 끝에서 부드럽게 0: 면에서 가장 가까운 점까지
+    float3 lp = posW - c;
+    float s = clamp(dot(lp, ex) / max(dot(ex, ex), 1e-8f), -1.0f, 1.0f);
+    float t = clamp(dot(lp, ey) / max(dot(ey, ey), 1e-8f), -1.0f, 1.0f);
+    float dEdge = length(posW - (c + ex * s + ey * t));
+    float window = saturate(1.0f - pow(dEdge / max(range, 0.0001f), 4.0f));
+    window *= window;
+    if (dot(lp, nPoly) < 0.0f && window > 0.0f)
+    {
+        // 법선 둘레 기저 (T1 · T2 · N)
+        float NoV = saturate(dot(N, V));
+        float3 T1 = V - N * dot(V, N);
+        T1 = dot(T1, T1) > 1e-8f ? normalize(T1) : normalize(cross(N, abs(N.y) < 0.99f ? float3(0, 1, 0) : float3(1, 0, 0)));
+        float3 T2 = cross(N, T1);
+        float3x3 basis = float3x3(T1, T2, N);
+
+        float area = disc ? 2.8284271f * length(ex) * length(ey) : 4.0f * length(ex) * length(ey);
+        float3 radiance = lightColor * (3.14159265f / max(area, 1e-6f)) * window;
+
+        result = diffuse * LtcPolygon(basis, posW, c, ex, ey, disc, false);
+        if (highlights)
+        {
+            float2 uv = float2(perceptualRoughness, sqrt(1.0f - NoV));
+            float4 t1 = LtcTexel(0u, uv);
+            float4 t2 = LtcTexel(1u, uv);
+            float3x3 Minv = float3x3(t1.x, 0.0f, t1.z,
+                                     0.0f, 1.0f, 0.0f,
+                                     t1.y, 0.0f, t1.w);
+            float spec = LtcPolygon(mul(Minv, basis), posW, c, ex, ey, disc, false);
+            result += specular * (spec * t2.x) + (1.0f - specular) * (spec * t2.y);
+        }
+        result *= radiance;
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // URP Lit 조명 (메시 PS, 나무 PS 공용). 결과는 선형 색 (감마 변환·안개는 호출자)
 //  Transmission: 잎처럼 얇은 면의 투과광 (Unreal 의 Two Sided Foliage 처럼 뒤에서 오는 빛이 비친다)
 // ---------------------------------------------------------------------------
@@ -1267,6 +1374,14 @@ float3 ShadeLit(LitSurface surf, float3 posW, float3 N, float3 V, float4 ssaoPos
             float4 c3 = ClusterTexel(li * 4u + 3u);
             if (!LightHits((uint)c3.y | ((uint)c3.z << 16)))
                 continue;
+            if (c1.w > 1.5f)
+            {
+                // 면광 (2 Rectangle, 3 Disc): 축 X = c2.xyz, 축 Y = (c2.w, c3.x, c3.w)
+                float4 c2a = ClusterTexel(li * 4u + 2u);
+                color += ShadeAreaLight(posW, N, V, diffuse, specular, perceptualRoughness, highlights,
+                                        c0.xyz, c2a.xyz, float3(c2a.w, c3.x, c3.w), c1.w > 2.5f, c0.w, ToLinear(c1.rgb));
+                continue;
+            }
             float3 toLight = c0.xyz - posW;
             float d = length(toLight);
             float3 L = toLight / max(d, 0.0001f);

@@ -280,7 +280,7 @@ namespace GameObjectMenu
 			if (ImGui::MenuItem("Directional Light")) add(GameObjectFactory::CreateDirectionalLight());
 			if (ImGui::MenuItem("Point Light")) add(GameObjectFactory::CreatePointLight());
 			if (ImGui::MenuItem("Spot Light")) add(GameObjectFactory::CreateSpotLight());
-			Disabled("Area Light");
+			if (ImGui::MenuItem("Area Light")) add(GameObjectFactory::CreateAreaLight());   // Rectangle (Type 에서 Disc 로)
 			ImGui::Separator();
 			// 2D 빛 (Unity 6 의 Light > 2D)
 			auto light2D = [&](const char* name, Light2D::Type t) {

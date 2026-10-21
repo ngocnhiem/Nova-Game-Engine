@@ -114,7 +114,22 @@ float Light::GetRange()
 		return m_PointDesc.Range;
 	case LightType::Spot:
 		return m_SpotDesc.Range;
+	case LightType::Rectangle:   // 컬링 구: 빛 면의 가장자리에서도 Range 까지
+		return m_AreaDesc.Range + 0.5f * sqrtf(m_AreaDesc.Size.x * m_AreaDesc.Size.x + m_AreaDesc.Size.y * m_AreaDesc.Size.y);
+	case LightType::Disc:
+		return m_AreaDesc.Range + m_AreaDesc.Size.x;
+	default:
+		return 0.0f;
 	}
+}
+
+// 면광: 자리 · 축 (그림자 · 카메라와 상관없이 Transform 그대로)
+static void FillAreaAxes(Transform* t, AreaLightDesc& d)
+{
+	XMStoreFloat3(&d.Position, t->GetPosition());
+	XMStoreFloat3(&d.Right, XMVector3Normalize(t->GetRight()));
+	XMStoreFloat3(&d.Up, XMVector3Normalize(t->GetUp()));
+	XMStoreFloat3(&d.Forward, XMVector3Normalize(t->GetLook()));
 }
 
 void Light::Update()
@@ -190,6 +205,10 @@ void Light::ViewUpdate()
 		XMStoreFloat3(&m_SpotDesc.Position, pos);
 		XMStoreFloat3(&m_SpotDesc.Direction, r);
 		break;
+	case LightType::Rectangle:
+	case LightType::Disc:
+		FillAreaAxes(m_pGameObject->GetTransform(), m_AreaDesc);
+		return;
 	default:
 		break;
 	}
@@ -261,6 +280,10 @@ void Light::EditorViewUpdate()
 		XMStoreFloat3(&m_SpotDesc.Position, pos);
 		XMStoreFloat3(&m_SpotDesc.Direction, r);
 		break;
+	case LightType::Rectangle:
+	case LightType::Disc:
+		FillAreaAxes(m_pGameObject->GetTransform(), m_AreaDesc);
+		return;
 	default:
 		break;
 	}
@@ -337,6 +360,8 @@ string Light::GetStringLightType(LightType type)
 	case LightType::Directional: return "Directional";
 	case LightType::Point: return "Point";
 	case LightType::Spot: return "Spot";
+	case LightType::Rectangle: return "Rectangle";
+	case LightType::Disc: return "Disc";
 	default: return "Unknown";
 	}
 }
@@ -347,6 +372,8 @@ const char* Light::InspectorIconName() const
 	{
 	case LightType::Point: return "light_point";
 	case LightType::Spot: return "light_spot";
+	case LightType::Rectangle:
+	case LightType::Disc: return "light_area";
 	default: return "light_directional";
 	}
 }
@@ -357,6 +384,8 @@ XMFLOAT4* Light::CurrentDiffuse()
 	{
 	case LightType::Point: return &m_PointDesc.Diffuse;
 	case LightType::Spot: return &m_SpotDesc.Diffuse;
+	case LightType::Rectangle:
+	case LightType::Disc: return &m_AreaDesc.Diffuse;
 	default: return &m_DirectionalDesc.Diffuse;
 	}
 }
@@ -375,8 +404,8 @@ static void KelvinToRGB(float kelvin, float rgb[3])
 
 void Light::OnInspectorGUI()
 {
-	static const char* kTypes[] = { "Spot", "Directional", "Point" };
-	static const LightType kTypeMap[] = { LightType::Spot, LightType::Directional, LightType::Point };
+	static const char* kTypes[] = { "Spot", "Directional", "Point", "Rectangle", "Disc" };
+	static const LightType kTypeMap[] = { LightType::Spot, LightType::Directional, LightType::Point, LightType::Rectangle, LightType::Disc };
 	static const char* kModes[] = { "Realtime", "Mixed", "Baked" };
 	static const char* kAppearance[] = { "Color", "Filter and Temperature" };
 	static const char* kRenderingLayers[] = { "Default" };
@@ -388,9 +417,9 @@ void Light::OnInspectorGUI()
 	if (UnityGUI::Foldout("General"))
 	{
 		int typeIndex = 1;
-		for (int i = 0; i < 3; ++i)
+		for (int i = 0; i < 5; ++i)
 			if (kTypeMap[i] == m_LightType) typeIndex = i;
-		if (UnityGUI::Dropdown("Type", &typeIndex, kTypes, 3, 1))
+		if (UnityGUI::Dropdown("Type", &typeIndex, kTypes, 5, 1))
 		{
 			m_LightType = kTypeMap[typeIndex];
 			projectionChanged = true;
@@ -441,6 +470,20 @@ void Light::OnInspectorGUI()
 			if (UnityGUI::Float("Range", &m_SpotDesc.Range, 1)) projectionChanged = true;
 			if (UnityGUI::Float("Spot Angle", &m_SpotDesc.Spot, 1)) projectionChanged = true;
 		}
+		else if (IsAreaLight())
+		{
+			// HDRP 의 Rectangle · Disc (실시간 면광): 크기를 바꿔도 전체 밝기 (Intensity) 는 그대로
+			if (UnityGUI::Float("Range", &m_AreaDesc.Range, 1))
+				m_AreaDesc.Range = (std::max)(m_AreaDesc.Range, 0.01f);
+			if (m_LightType == LightType::Rectangle)
+			{
+				UnityGUI::Float("Width", &m_AreaDesc.Size.x, 1);
+				UnityGUI::Float("Height", &m_AreaDesc.Size.y, 1);
+			}
+			else
+				UnityGUI::Float("Radius", &m_AreaDesc.Size.x, 1);
+			SetAreaSize(m_AreaDesc.Size);
+		}
 
 		bool cookie = false;
 		UnityGUI::ToggleLeft("Cookie", &cookie, 1, true, true);
@@ -457,6 +500,8 @@ void Light::OnInspectorGUI()
 	{
 		// Unity URP: Shadow Type 아래 Realtime Shadows (Strength / Bias / Near Plane)
 		static const char* kBias[] = { "Use settings from Render Pipeline", "Custom" };
+		if (IsAreaLight())
+			UnityGUI::HelpBox("Area lights (Rectangle, Disc) do not cast realtime shadows yet. They light the Forward+ and Deferred rendering paths.", false, 1);
 		UnityGUI::Dropdown("Shadow Type", &m_ShadowType, kShadow, 3, 1);
 		if (m_ShadowType != 0)
 		{
@@ -493,8 +538,18 @@ void Light::OnDrawGizmos()
 	XMFLOAT3 dir;
 	XMStoreFloat3(&dir, XMVector3Normalize(transform->GetLook()));
 
-	const int kind = m_LightType == LightType::Directional ? 0 : (m_LightType == LightType::Point ? 1 : 2);
 	const bool selected = (SelectionManager::GetSelectedGameObject() == GetGameObject());
+	if (IsAreaLight())
+	{
+		// 면 모양 (사각형 · 원) + 빛이 나가는 쪽 화살표
+		AreaLightDesc d = m_AreaDesc;
+		FillAreaAxes(transform, d);
+		const bool disc = m_LightType == LightType::Disc;
+		const float hx = disc ? d.Size.x : d.Size.x * 0.5f, hy = disc ? d.Size.x : d.Size.y * 0.5f;
+		SceneViewOverlay::DrawAreaLightGizmo(d.Position, XMFLOAT3(d.Right.x * hx, d.Right.y * hx, d.Right.z * hx), XMFLOAT3(d.Up.x * hy, d.Up.y * hy, d.Up.z * hy), d.Forward, disc, selected);
+		return;
+	}
+	const int kind = m_LightType == LightType::Directional ? 0 : (m_LightType == LightType::Point ? 1 : 2);
 	SceneViewOverlay::DrawLightGizmo(XMFLOAT3(pos.x, pos.y, pos.z), dir, kind, selected);
 }
 
@@ -522,6 +577,10 @@ GENERATE_COMPONENT_FUNC_TOJSON(Light)
 	j["spotLightRange"] = m_SpotDesc.Range;
 	j["spotLightSpot"] = m_SpotDesc.Spot;
 	j["spotLightAtt"] = { m_SpotDesc.Att.x,m_SpotDesc.Att.y,m_SpotDesc.Att.z };
+
+	j["areaLightDiffuse"] = { m_AreaDesc.Diffuse.x, m_AreaDesc.Diffuse.y, m_AreaDesc.Diffuse.z, m_AreaDesc.Diffuse.w };
+	j["areaLightRange"] = m_AreaDesc.Range;
+	j["areaLightSize"] = { m_AreaDesc.Size.x, m_AreaDesc.Size.y };
 
 	j["enabled"] = m_Enabled;
 	j["intensity"] = m_Intensity;
@@ -594,6 +653,15 @@ GENERATE_COMPONENT_FUNC_FROMJSON(Light)
 		DE_SERIALIZE_FLOAT(j, m_SpotDesc.Spot, "spotLightSpot");
 		DE_SERIALIZE_FLOAT3(j, m_SpotDesc.Att, "spotLightAtt");
 
+	}
+
+	// Area (Rectangle · Disc)
+	{
+		DE_SERIALIZE_FLOAT4(j, m_AreaDesc.Diffuse, "areaLightDiffuse");
+		DE_SERIALIZE_FLOAT(j, m_AreaDesc.Range, "areaLightRange");
+		if (j.contains("areaLightSize") && j["areaLightSize"].is_array() && j["areaLightSize"].size() == 2)
+			SetAreaSize(XMFLOAT2(j["areaLightSize"][0].get<float>(), j["areaLightSize"][1].get<float>()));
+		m_AreaDesc.Range = (std::max)(m_AreaDesc.Range, 0.01f);
 	}
 
 	ProjUpdate();

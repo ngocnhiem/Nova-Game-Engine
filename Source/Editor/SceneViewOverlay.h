@@ -37,6 +37,8 @@ public:
 	static void DrawFrustum(const XMMATRIX& worldMatrix, float nearZ, float farZ, float fovYDegrees, ImU32 color);
 	// 광원 기즈모 (Unity 모양): 화면 크기가 일정한 해 아이콘 + 방향 표시(원 + 평행선 + 화살표). kind: 0 Directional, 1 Point, 2 Spot
 	static void DrawLightGizmo(const XMFLOAT3& position, const XMFLOAT3& dir, int kind, bool selected);
+	// 면광 기즈모: 사각형 (Rectangle) 또는 원 (Disc) 테두리 + forward 쪽 화살표. halfX · halfY = 반 크기만큼의 축
+	static void DrawAreaLightGizmo(const XMFLOAT3& center, const XMFLOAT3& halfX, const XMFLOAT3& halfY, const XMFLOAT3& forward, bool disc, bool selected);
 
 	static bool Project(const XMFLOAT3& world, ImVec2& out);
 

@@ -28,6 +28,7 @@ namespace ClusteredLighting
 		int Dropped = 0;           // kMaxIndices 를 넘어 못 넣은 칸
 		int MaxPerCluster = 0;
 		int NonEmptyClusters = 0;
+		int AreaLights = 0;
 		float BuildMs = 0.0f;
 	};
 	const Stats& LastStats();

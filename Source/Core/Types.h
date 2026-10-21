@@ -50,5 +50,7 @@ enum class LightType
 	Directional,
 	Spot,
 	Point,
+	Rectangle,   // area light (HDRP style, LTC) - Unity LightType.Rectangle
+	Disc,        // area light - Unity LightType.Disc
 	End
 };

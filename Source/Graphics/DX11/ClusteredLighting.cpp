@@ -6,6 +6,7 @@
 #include <chrono>
 #include "JobSystem.h"
 #include "FrameArena.h"
+#include "LtcTables.h"
 
 namespace ClusteredLighting
 {
@@ -14,9 +15,13 @@ namespace ClusteredLighting
 		constexpr int kClusters = kTilesX * kTilesY * kSlices;
 		// 텍스처 하나 (RGBA32F, 가로 1024): OpenGL 은 프로그램마다 샘플러가 32 개까지 — 무거운 셰이더 (lilToon 지형 · 테셀레이션) 가 넘지 않게 하나로 묶는다
 		//  텍셀 i → (i % 1024, i / 1024). 빛 = 0 부터 (빛마다 4), 클러스터 표 = 4096 부터 (시작, 개수), 번호 목록 = 8192 부터 (텍셀마다 4 개)
+		//  면광의 LTC 표 두 장 (64 x 64) = 24576 부터 (한 번만 올린다 — 셰이더가 Load 로 쌍선형)
 		constexpr int kWidth = 1024;
 		constexpr int kLightBase = 0, kGridBase = 4096, kIndexBase = 8192;
-		constexpr int kRows = (kIndexBase + (kMaxIndices + 4) / 4 + kWidth - 1) / kWidth;   // 24
+		constexpr int kIndexRows = (kIndexBase + (kMaxIndices + 4) / 4 + kWidth - 1) / kWidth;   // 24
+		constexpr int kLtcBase = kIndexRows * kWidth;   // 24576
+		constexpr int kRows = kIndexRows + (64 * 64 * 2) / kWidth;   // 32
+		bool s_LtcUploaded = false;
 
 		struct Tex
 		{
@@ -59,7 +64,50 @@ namespace ClusteredLighting
 			}
 			t.W = w;
 			t.H = h;
+			s_LtcUploaded = false;   // 새 텍스처 — LTC 표를 다시 올린다
 			return true;
+		}
+
+		float HalfToFloat(uint16_t h)
+		{
+			const uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+			uint32_t exp = (h >> 10) & 0x1Fu, mant = h & 0x3FFu, bits;
+			if (exp == 0)
+			{
+				if (mant == 0)
+					bits = sign;
+				else
+				{
+					// 비정규 → 정규화
+					exp = 127 - 15 + 1;
+					while ((mant & 0x400u) == 0) { mant <<= 1; --exp; }
+					mant &= 0x3FFu;
+					bits = sign | (exp << 23) | (mant << 13);
+				}
+			}
+			else if (exp == 31)
+				bits = sign | 0x7F800000u | (mant << 13);
+			else
+				bits = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+			float f;
+			memcpy(&f, &bits, sizeof(f));
+			return f;
+		}
+
+		// 면광 LTC 표 (LtcTables.h — 반 정밀도) → 텍스처 뒤쪽 8 줄
+		void UploadLtc(GfxContext* ctx)
+		{
+			if (s_LtcUploaded || !s_Data.T)
+				return;
+			std::vector<XMFLOAT4> rows((size_t)(kRows - kIndexRows) * kWidth);
+			for (int i = 0; i < 64 * 64; ++i)
+			{
+				rows[(size_t)i] = XMFLOAT4(HalfToFloat(kLtc1[i * 4]), HalfToFloat(kLtc1[i * 4 + 1]), HalfToFloat(kLtc1[i * 4 + 2]), HalfToFloat(kLtc1[i * 4 + 3]));
+				rows[(size_t)(4096 + i)] = XMFLOAT4(HalfToFloat(kLtc2[i * 4]), HalfToFloat(kLtc2[i * 4 + 1]), HalfToFloat(kLtc2[i * 4 + 2]), HalfToFloat(kLtc2[i * 4 + 3]));
+			}
+			const D3D11_BOX box = { 0, (UINT)kIndexRows, 0, (UINT)kWidth, (UINT)kRows, 1 };
+			ctx->UpdateSubresource(s_Data.T.Get(), 0, &box, rows.data(), kWidth * sizeof(XMFLOAT4), 0);
+			s_LtcUploaded = true;
 		}
 
 		int SliceOf(float z)
@@ -146,7 +194,9 @@ namespace ClusteredLighting
 			Vec3 center = l.Position;
 			float radius = l.Range;
 			float cosOuter = -2.0f, cosInner = -1.0f;
-			if (l.Type == 1)
+			if (l.Type >= 2)
+				radius = l.Range + sqrtf(l.AxisX.LengthSquared() + l.AxisY.LengthSquared());   // 면광: 면의 모서리에서도 범위까지
+			else if (l.Type == 1)
 			{
 				const float half = XMConvertToRadians(std::clamp(l.SpotAngle, 1.0f, 179.0f) * 0.5f);
 				cosOuter = cosf(half);
@@ -229,6 +279,14 @@ namespace ClusteredLighting
 			XMFLOAT4* d = &s_LightData[(size_t)index * 4];
 			d[0] = XMFLOAT4(l.Position.x, l.Position.y, l.Position.z, l.Range);
 			d[1] = XMFLOAT4(l.Color.x, l.Color.y, l.Color.z, (float)l.Type);
+			if (l.Type >= 2)
+			{
+				// 면광: d[2] = (축 X, 축 Y.x), d[3] = (축 Y.y, 마스크, 마스크, 축 Y.z)
+				d[2] = XMFLOAT4(l.AxisX.x, l.AxisX.y, l.AxisX.z, l.AxisY.x);
+				d[3] = XMFLOAT4(l.AxisY.y, (float)(l.Mask & 0xFFFFu), (float)(l.Mask >> 16), l.AxisY.z);
+				++s_Stats.AreaLights;
+				continue;
+			}
 			Vec3 dir = l.Direction;
 			if (dir.LengthSquared() > 1e-8f)
 				dir.Normalize();
@@ -289,6 +347,7 @@ namespace ClusteredLighting
 			upload(kLightBase, s_LightCount * 4);
 			upload(kGridBase, kClusters);
 			upload(kIndexBase, ((int)offset + 3) / 4);
+			UploadLtc(ctx);
 		}
 		else
 			s_LightCount = 0;   // 텍스처를 못 만들었다 — 셰이더는 클러스터 빛 없이
@@ -312,7 +371,7 @@ namespace ClusteredLighting
 	{
 		const Stats& s = s_Stats;
 		return {
-			{ "enabled", s_Enabled }, { "grid", { kTilesX, kTilesY, kSlices } }, { "lights", s.Lights }, { "culled", s.Culled }, { "indices", s.Indices }, { "dropped", s.Dropped },
+			{ "enabled", s_Enabled }, { "grid", { kTilesX, kTilesY, kSlices } }, { "lights", s.Lights }, { "areaLights", s.AreaLights }, { "culled", s.Culled }, { "indices", s.Indices }, { "dropped", s.Dropped },
 			{ "maxPerCluster", s.MaxPerCluster }, { "nonEmptyClusters", s.NonEmptyClusters }, { "buildMs", s.BuildMs },
 			{ "maxLights", kMaxAdditionalLights }, { "mainLights", LIGHT_SIZE },
 			{ "sceneAdditional", (int)LightManager::GetI()->GetEditorAdditionalLights().size() },

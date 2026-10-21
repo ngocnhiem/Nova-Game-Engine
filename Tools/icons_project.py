@@ -101,4 +101,7 @@ PROJECT_ICONS = {
   <rect x="6" y="7.5" width="6.5" height="2" rx="0.5" fill="#4CAF50"/>
   <rect x="4" y="10.5" width="4" height="1.6" rx="0.5" fill="#E0A030"/>
   <line x1="10.5" y1="3" x2="10.5" y2="13" stroke="#E04040" stroke-width="1"/>'''),
+    # 면광 (Rectangle · Disc) — 빛나는 판 + 아래로 퍼지는 빛
+    "light_area": _svg('''<rect x="2.5" y="2.5" width="11" height="4" rx="0.8" fill="#F7D65A"/>
+  <path d="M3.2 8.2 L1.8 13.5 M6.1 8.2 L5.6 13.5 M9.9 8.2 L10.4 13.5 M12.8 8.2 L14.2 13.5" stroke="#F5C542" stroke-width="1.3" stroke-linecap="round"/>'''),
 }

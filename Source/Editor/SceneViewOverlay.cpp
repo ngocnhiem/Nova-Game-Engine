@@ -130,6 +130,44 @@ void SceneViewOverlay::DrawFrustum(const XMMATRIX& worldMatrix, float nearZ, flo
 	}
 }
 
+void SceneViewOverlay::DrawAreaLightGizmo(const XMFLOAT3& c, const XMFLOAT3& hx, const XMFLOAT3& hy, const XMFLOAT3& fwd, bool disc, bool selected)
+{
+	const ImU32 lineColor = selected ? IM_COL32(255, 247, 140, 255) : IM_COL32(255, 238, 120, 190);
+	const float thickness = selected ? 2.2f : 1.6f;
+	auto at = [&](float u, float v) { return XMFLOAT3(c.x + hx.x * u + hy.x * v, c.y + hx.y * u + hy.y * v, c.z + hx.z * u + hy.z * v); };
+	if (disc)
+	{
+		const int segments = 40;
+		XMFLOAT3 prev = at(1.0f, 0.0f);
+		for (int k = 1; k <= segments; ++k)
+		{
+			const float a = XM_2PI * k / segments;
+			const XMFLOAT3 cur = at(cosf(a), sinf(a));
+			DrawLine(prev, cur, lineColor, thickness);
+			prev = cur;
+		}
+	}
+	else
+	{
+		const XMFLOAT3 p0 = at(-1, -1), p1 = at(1, -1), p2 = at(1, 1), p3 = at(-1, 1);
+		DrawLine(p0, p1, lineColor, thickness);
+		DrawLine(p1, p2, lineColor, thickness);
+		DrawLine(p2, p3, lineColor, thickness);
+		DrawLine(p3, p0, lineColor, thickness);
+	}
+	// 빛이 나가는 쪽: 가운데에서 forward 로 (크기의 절반 · 최소 0.25 m)
+	const float lx = sqrtf(hx.x * hx.x + hx.y * hx.y + hx.z * hx.z), ly = sqrtf(hy.x * hy.x + hy.y * hy.y + hy.z * hy.z);
+	const float len = (std::max)(0.25f, (std::max)(lx, ly));
+	const XMFLOAT3 tip(c.x + fwd.x * len, c.y + fwd.y * len, c.z + fwd.z * len);
+	DrawLine(c, tip, lineColor, thickness);
+	for (int k = 0; k < 4; ++k)
+	{
+		const float u = (k & 1) ? 1.0f : -1.0f;
+		const XMFLOAT3 corner = (k < 2) ? at(u, 0.0f) : at(0.0f, u);
+		DrawLine(corner, XMFLOAT3(corner.x + fwd.x * len * 0.5f, corner.y + fwd.y * len * 0.5f, corner.z + fwd.z * len * 0.5f), lineColor, thickness * 0.8f);
+	}
+}
+
 void SceneViewOverlay::DrawLightGizmo(const XMFLOAT3& p, const XMFLOAT3& dir, int kind, bool selected)
 {
 	// 화면에서 일정한 크기가 되도록 카메라 거리에 비례한 월드 크기 (Unity HandleUtility.GetHandleSize 와 같은 생각)

@@ -40,6 +40,8 @@ public:
 	static GameObject* CreateDirectionalLight(const std::string& name = "Directional Light");
 	static GameObject* CreatePointLight(const std::string& name = "Point Light");
 	static GameObject* CreateSpotLight(const std::string& name = "Spot Light");
+	// 면광 (HDRP 식 실시간 Rectangle · Disc): 높이 3 m 에서 아래를 비춘다
+	static GameObject* CreateAreaLight(const std::string& name = "Area Light", bool disc = false);
 	static GameObject* CreateCamera(const std::string& name = "Main Camera");
 
 	// 엔진 패키지의 기본 캐릭터 (Resources/Packages/Character). 루트에 Animation 또는 Animator,

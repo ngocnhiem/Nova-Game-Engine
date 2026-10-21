@@ -642,6 +642,9 @@ namespace NovaEngine
             return new Ray(t.position, t.forward + t.right * (x * h * aspect) + t.up * (y * h));
         }
     }
+    /// <summary>Unity 의 LightType (번호도 같다)</summary>
+    public enum LightType { Spot = 0, Directional = 1, Point = 2, Rectangle = 3, Disc = 4 }
+
     public sealed unsafe class Light : Behaviour
     {
         internal Light() { }
@@ -651,6 +654,14 @@ namespace NovaEngine
         public float shadowStrength { get => Native.Api.Light_GetFloat(m_Id, 1); set => Native.Api.Light_SetFloat(m_Id, 1, value); }
         public float range => Native.Api.Light_GetFloat(m_Id, 2);
         public float spotAngle => Native.Api.Light_GetFloat(m_Id, 3);
+        /// <summary>Unity LightType (Spot · Directional · Point · Rectangle · Disc)</summary>
+        public LightType type => (LightType)(int)Native.Api.Light_GetFloat(m_Id, 6);
+        /// <summary>면광 크기 (Rectangle: 가로 · 세로 m, Disc: x = 반지름) — Unity Light.areaSize</summary>
+        public Vector2 areaSize
+        {
+            get => new Vector2(Native.Api.Light_GetFloat(m_Id, 4), Native.Api.Light_GetFloat(m_Id, 5));
+            set { Native.Api.Light_SetFloat(m_Id, 4, value.x); Native.Api.Light_SetFloat(m_Id, 5, value.y); }
+        }
         public Color color
         {
             get { Vector4 v; Native.Api.Light_GetColor(m_Id, &v); return new Color(v.x, v.y, v.z, 1f); }

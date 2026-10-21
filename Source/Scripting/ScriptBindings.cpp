@@ -1862,6 +1862,17 @@ namespace ScriptBindings
 			case 1: return l->GetShadowStrength();
 			case 2: return l->GetRange();
 			case 3: return l->GetSpotAngle();
+			case 4: return l->GetAreaSize().x;
+			case 5: return l->GetAreaSize().y;
+			case 6:   // Unity LightType 번호 (Spot 0, Directional 1, Point 2, Rectangle 3, Disc 4)
+				switch (l->GetLightType())
+				{
+				case LightType::Spot: return 0.0f;
+				case LightType::Point: return 2.0f;
+				case LightType::Rectangle: return 3.0f;
+				case LightType::Disc: return 4.0f;
+				default: return 1.0f;
+				}
 			}
 			return 0.0f;
 		};
@@ -1870,6 +1881,8 @@ namespace ScriptBindings
 			if (l == nullptr) return;
 			if (what == 0) l->SetIntensity(v);
 			else if (what == 1) l->SetShadowStrength(v);
+			else if (what == 4) l->SetAreaSize(XMFLOAT2(v, l->GetAreaSize().y));
+			else if (what == 5) l->SetAreaSize(XMFLOAT2(l->GetAreaSize().x, v));
 		};
 		t.Light_GetColor = [](uint64 id, Vec4* out) {
 			Light* l = Get<Light>(id);
